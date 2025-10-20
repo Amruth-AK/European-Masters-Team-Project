@@ -38,6 +38,119 @@ def encode_one_hot(df,column):
 	2. `Remove_outliers_iqr(df, column)`: Directly delete rows containing outliers
 6. 
 
+## Numerical Features Preprocessing
+### 1. `standard_scaler(df, column)`
+- **Standard Scaling (Z-score Normalization)**
+- **Formula**: `z = (x - mean) / std`
+- **Use Case**: Best for normally distributed data
+- **Output Range**: Typically between -3 and +3 (for normal distribution)
+- **Handles**: Single column or list of columns
+
+```python
+
+df = standard_scaler(df, 'Age')
+
+df = standard_scaler(df, ['Age', 'Fare'])
+
+```
+
+  
+#### **When to use:**
+- Data is approximately normally distributed
+- Algorithm requires standardized features (e.g., SVM, Neural Networks, PCA)
+- Features have different units/scales
+
+  
+
+### 2. `minmax_scaler(df, column, feature_range=(0, 1))`
+- **Min-Max Scaling**
+- **Formula**: `x_scaled = (x - min) / (max - min) * (max_range - min_range) + min_range`
+- **Use Case**: Best when you need bounded values in a specific range
+- **Output Range**: Default (0, 1), customizable
+- **Handles**: Single column or list of columns
+
+```python
+
+df = minmax_scaler(df, 'Age')
+
+df = minmax_scaler(df, 'Fare', feature_range=(0, 1))
+
+df = minmax_scaler(df, ['Age', 'Fare'], feature_range=(-1, 1))
+
+```
+
+#### **When to use:**
+- Need features in a specific range (e.g., [0,1] for neural networks
+- Data doesn't have outliers
+- Want to preserve the original distribution shape
+
+
+## Outlier
+
+### 1. `clip_outliers_iqr(df, column, whisker_width=1.5)`
+- **Capping Method** - Replaces outliers with boundary values
+```
+Lower bound = Q1 - whisker_width × IQR
+Upper bound = Q3 + whisker_width × IQR
+```
+  - **Behavior:**
+	- Values below lower bound → set to lower bound
+	- Values above upper bound → set to upper bound
+- **Preserves all rows** in the dataset
+
+```python
+
+# Original values: [10, 12, 11, 100, 9, 200, 11]
+
+df = clip_outliers_iqr(df, 'Fare', whisker_width=1.5)
+
+# Result: [10, 12, 11, upper_bound, 9, upper_bound, 11]
+
+# All rows kept, extreme values capped
+
+```
+
+#### **When to use:**
+-  Want to preserve dataset size
+- Outliers might contain useful information
+- Small datasets where losing rows is costly
+- Need to maintain row relationships
+
+### 2. `remove_outliers_iqr(df, column, whisker_width=1.5)`
+- **Deletion Method** - Removes rows containing outliers
+- **Detection:**
+```
+
+Lower bound = Q1 - whisker_width × IQR
+
+Upper bound = Q3 + whisker_width × IQR
+
+```
+- **Behavior:**
+	- Rows with values < lower bound → deleted
+	- Rows with values > upper bound → deleted
+- **Reduces dataset size**
+
+```python
+
+# Original: 15 rows
+
+df = remove_outliers_iqr(df, 'Fare', whisker_width=1.5)
+
+# Result: 13 rows (2 outlier rows removed)
+
+```
+ 
+
+#### **When to use:**
+
+-  Large dataset (can afford to lose rows)
+- Outliers are measurement errors
+- Want clean statistical properties
+- Avoid if dataset is small
+
+  
+
 # Main
 - Receives the diagnostics.
 - Calls the **Rule Engine** to get suggestions.
@@ -75,3 +188,6 @@ preprocessing_suggestions = [
     }
 ]
 ```
+
+
+
