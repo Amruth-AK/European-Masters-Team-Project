@@ -101,73 +101,129 @@ def minmax_scaler(df: pd.DataFrame, column: Union[str, List[str]],
 
 
 # ============================================================================
-# Helper function for numerical features
+# Outlier Handling - Zhiqi
 # ============================================================================
 
-def robust_scaler(df: pd.DataFrame, column: Union[str, List[str]]) -> pd.DataFrame:
+def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5) -> pd.DataFrame:
     """
-    Apply robust scaling using median and IQR (Interquartile Range).
-    More robust to outliers than standard scaling.
+    Cap/clip outliers using IQR method - replaces outliers with boundary values.
     
-    Formula: x_scaled = (x - median) / IQR
+    Outliers are detected using the IQR (Interquartile Range) method:
+    - Lower bound: Q1 - whisker_width * IQR
+    - Upper bound: Q3 + whisker_width * IQR
+    
+    Values outside these bounds are replaced with the boundary values (capping).
     
     Args:
         df: Input DataFrame
-        column: Column name(s) to scale. Can be a single string or list of strings.
+        column: Column name to process
+        whisker_width: Multiplier for IQR to define outlier boundaries. 
+                      Default is 1.5 (standard box plot definition)
     
     Returns:
-        DataFrame with scaled column(s)
+        DataFrame with outliers clipped to boundary values
     
     Example:
-        >>> df = robust_scaler(df, 'Age')
+        >>> df = clip_outliers_iqr(df, 'Fare')
+        >>> df = clip_outliers_iqr(df, 'Age', whisker_width=2.0)
+    
+    Note:
+        - whisker_width=1.5: Standard outlier detection (default)
+        - whisker_width=3.0: More conservative, detects only extreme outliers
     """
     df = df.copy()
     
-    # Convert single column to list for uniform processing
-    columns = [column] if isinstance(column, str) else column
+    if column not in df.columns:
+        raise ValueError(f"Column '{column}' not found in DataFrame")
     
-    for col in columns:
-        if col not in df.columns:
-            raise ValueError(f"Column '{col}' not found in DataFrame")
-        
-        # Check if column is numeric
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            raise TypeError(f"Column '{col}' must be numeric for robust scaling")
-        
-        # Calculate median and IQR
-        median = df[col].median()
-        q1 = df[col].quantile(0.25)
-        q3 = df[col].quantile(0.75)
-        iqr = q3 - q1
-        
-        # Avoid division by zero
-        if iqr == 0:
-            print(f"Warning: Column '{col}' has zero IQR. Setting to 0.")
-            df[col] = 0
-        else:
-            df[col] = (df[col] - median) / iqr
+    # Check if column is numeric
+    if not pd.api.types.is_numeric_dtype(df[column]):
+        raise TypeError(f"Column '{column}' must be numeric for outlier detection")
+    
+    # Calculate quartiles and IQR
+    q1 = df[column].quantile(0.25)
+    q3 = df[column].quantile(0.75)
+    iqr = q3 - q1
+    
+    # Calculate boundaries
+    lower_bound = q1 - whisker_width * iqr
+    upper_bound = q3 + whisker_width * iqr
+    
+    # Count outliers before clipping
+    outliers_lower = (df[column] < lower_bound).sum()
+    outliers_upper = (df[column] > upper_bound).sum()
+    total_outliers = outliers_lower + outliers_upper
+    
+    if total_outliers > 0:
+        print(f"Column '{column}': Found {total_outliers} outliers "
+              f"({outliers_lower} below {lower_bound:.2f}, "
+              f"{outliers_upper} above {upper_bound:.2f})")
+        print(f"Clipping outliers to range [{lower_bound:.2f}, {upper_bound:.2f}]")
+    
+    # Clip outliers to boundary values
+    df[column] = df[column].clip(lower=lower_bound, upper=upper_bound)
     
     return df
 
 
-# ============================================================================
-# Placeholder functions for other team members
-# ============================================================================
-
-def impute_median(df: pd.DataFrame, column: str) -> pd.DataFrame:
+def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5) -> pd.DataFrame:
     """
-    Impute missing values with median.
-    Team: Tecla
+    Remove rows containing outliers using IQR method.
+    
+    Outliers are detected using the IQR (Interquartile Range) method:
+    - Lower bound: Q1 - whisker_width * IQR
+    - Upper bound: Q3 + whisker_width * IQR
+    
+    Rows with values outside these bounds are deleted from the DataFrame.
+    
+    Args:
+        df: Input DataFrame
+        column: Column name to process
+        whisker_width: Multiplier for IQR to define outlier boundaries.
+                      Default is 1.5 (standard box plot definition)
+    
+    Returns:
+        DataFrame with outlier rows removed
+    
+    Example:
+        >>> df = remove_outliers_iqr(df, 'Fare')
+        >>> df = remove_outliers_iqr(df, 'Age', whisker_width=2.0)
+    
+    Warning:
+        This method permanently removes rows from the dataset. 
+        Use with caution, especially if you have limited data.
     """
-    # TODO: Implement by Tecla
-    pass
-
-
-def encode_one_hot(df: pd.DataFrame, column: str) -> pd.DataFrame:
-    """
-    One-hot encode categorical column.
-    Team: Amruth
-    """
-    # TODO: Implement by Amruth
-    pass
+    df = df.copy()
+    
+    if column not in df.columns:
+        raise ValueError(f"Column '{column}' not found in DataFrame")
+    
+    # Check if column is numeric
+    if not pd.api.types.is_numeric_dtype(df[column]):
+        raise TypeError(f"Column '{column}' must be numeric for outlier detection")
+    
+    original_rows = len(df)
+    
+    # Calculate quartiles and IQR
+    q1 = df[column].quantile(0.25)
+    q3 = df[column].quantile(0.75)
+    iqr = q3 - q1
+    
+    # Calculate boundaries
+    lower_bound = q1 - whisker_width * iqr
+    upper_bound = q3 + whisker_width * iqr
+    
+    # Identify outliers
+    outliers_mask = (df[column] < lower_bound) | (df[column] > upper_bound)
+    outliers_count = outliers_mask.sum()
+    
+    if outliers_count > 0:
+        print(f"Column '{column}': Removing {outliers_count} rows with outliers "
+              f"(outside range [{lower_bound:.2f}, {upper_bound:.2f}])")
+        print(f"Original rows: {original_rows}, Remaining rows: {original_rows - outliers_count}")
+    
+    # Remove outliers
+    df = df[~outliers_mask].reset_index(drop=True)
+    
+    return df
 
