@@ -175,6 +175,7 @@ if __name__ == '__main__':
     sample_df = pd.read_csv(r'C:\Users\adria\PycharmProjects\pythonProject3\train.csv')
 
     # Paste the dictionary output from your analysis function here
-    analysis_output = analysis.analysis(sample_df, 'accident_risk')
+    analysis_output = analyze.analysis(sample_df, 'accident_risk')
     create_dashboard(analysis_output)
+
 
