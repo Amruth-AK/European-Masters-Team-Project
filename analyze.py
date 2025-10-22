@@ -63,6 +63,7 @@ class DataAnalyzer:
         }
 
         # Distributions and Outliers
+        total_rows = len(self.df)
         for col in numerical_cols:
             col_data = self.df[col].dropna()
             self.results['distributions'][col] = {'skewness': skew(col_data)}
@@ -74,17 +75,32 @@ class DataAnalyzer:
                 'bin_edges': bin_edges.tolist()
             }
 
-            # Outliers
             Q1 = desc_stats[col]['25%']
             Q3 = desc_stats[col]['75%']
             IQR = Q3 - Q1
-            lower, upper = Q1 - 1.5 * IQR, Q3 + 1.5 * IQR
-            outliers = self.df[(self.df[col] < lower) | (self.df[col] > upper)]
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            # Find lower and upper outliers separately
+            lower_outliers = self.df[self.df[col] < lower_bound]
+            upper_outliers = self.df[self.df[col] > upper_bound]
+
+            # Get the counts
+            lower_outlier_count = len(lower_outliers)
+            upper_outlier_count = len(upper_outliers)
+            total_outlier_count = lower_outlier_count + upper_outlier_count
+
+            # Store all information in the results dictionary
             self.results['outlier_info'][col] = {
-                'lower_bound': lower,
-                'upper_bound': upper,
-                'outlier_count': len(outliers),
-                'outlier_percentage': (len(outliers) / len(self.df)) * 100
+                # Original Info
+                'lower_bound': lower_bound,
+                'upper_bound': upper_bound,
+                'outlier_count': total_outlier_count,
+                'outlier_percentage': (total_outlier_count / total_rows) * 100 if total_rows > 0 else 0,
+                # New Detailed Info
+                'lower_outlier_count': lower_outlier_count,
+                'lower_outlier_percentage': (lower_outlier_count / total_rows) * 100 if total_rows > 0 else 0,
+                'upper_outlier_count': upper_outlier_count,
+                'upper_outlier_percentage': (upper_outlier_count / total_rows) * 100 if total_rows > 0 else 0,
             }
         return self
 
@@ -143,10 +159,5 @@ class DataAnalyzer:
          .analyze_row_duplicates()  # Renamed method call
          .analyze_feature_duplicates())  # New method call
         return self.results
-
-
-
-
-
 
 
