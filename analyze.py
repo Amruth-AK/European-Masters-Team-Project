@@ -145,17 +145,8 @@ class DataAnalyzer:
         return self.results
 
 
-def pretty_print_dict(d):
-    # (Your existing pretty_print_dict function)
-        pretty_dict = ''
-        for k, v in d.items():
-            pretty_dict += f'{k}: \n'
-            if isinstance(v, dict):
-                for value in v:
-                    pretty_dict += f'    {value}: {v[value]}\n'
-            else:
-                pretty_dict += f'    {v}\n'
-        return pretty_dict
+
+
 
 
 
