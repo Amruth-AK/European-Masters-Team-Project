@@ -147,4 +147,3 @@ def delete_duplicates(df: pd.DataFrame, subset: Union[str, List[str], None] = No
     print(f"Removed {before - after} duplicate rows (kept first occurrence).")
     return df
 
-
