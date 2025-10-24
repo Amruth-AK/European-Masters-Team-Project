@@ -93,7 +93,7 @@ def suggest_outlier_handling(analysis_results: dict) -> list:
                     'issue': f'Contains {outlier_count} outliers ({outlier_percentage:.1f}% of data)',
                     'suggestion': 'Clip outliers to IQR boundaries to preserve all rows while limiting extreme values.',
                     'function_to_call': 'clip_outliers_iqr',
-                    'kwargs': {'column': col, 'whisker_width': 1.5}
+                    'kwargs': {'column': col, 'analysis_results': analysis_results, 'whisker_width': 1.5}
                 })
             
             # Rule 2: Large percentage of outliers (>=5%) -> consider removal
@@ -103,7 +103,7 @@ def suggest_outlier_handling(analysis_results: dict) -> list:
                     'issue': f'High proportion of outliers ({outlier_count} rows, {outlier_percentage:.1f}%)',
                     'suggestion': 'Consider removing outlier rows if dataset is sufficiently large.',
                     'function_to_call': 'remove_outliers_iqr',
-                    'kwargs': {'column': col, 'whisker_width': 1.5}
+                    'kwargs': {'column': col, 'analysis_results': analysis_results, 'whisker_width': 1.5}
                 })
     
     return suggestions

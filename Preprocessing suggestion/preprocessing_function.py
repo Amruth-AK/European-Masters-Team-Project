@@ -104,19 +104,16 @@ def minmax_scaler(df: pd.DataFrame, column: Union[str, List[str]],
 # Outlier Handling - Zhiqi
 # ============================================================================
 
-def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5) -> pd.DataFrame:
+def clip_outliers_iqr(df: pd.DataFrame, column: str, analysis_results: dict = None, whisker_width: float = 1.5) -> pd.DataFrame:
     """
     Cap/clip outliers using IQR method - replaces outliers with boundary values.
     
-    Outliers are detected using the IQR (Interquartile Range) method:
-    - Lower bound: Q1 - whisker_width * IQR
-    - Upper bound: Q3 + whisker_width * IQR
-    
-    Values outside these bounds are replaced with the boundary values (capping).
+    Can use pre-calculated boundaries from analysis_results or calculate new ones.
     
     Args:
         df: Input DataFrame
         column: Column name to process
+        analysis_results: Optional analysis results containing pre-calculated boundaries
         whisker_width: Multiplier for IQR to define outlier boundaries. 
                       Default is 1.5 (standard box plot definition)
     
@@ -124,12 +121,8 @@ def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5)
         DataFrame with outliers clipped to boundary values
     
     Example:
-        >>> df = clip_outliers_iqr(df, 'Fare')
+        >>> df = clip_outliers_iqr(df, 'Fare', analysis_results)
         >>> df = clip_outliers_iqr(df, 'Age', whisker_width=2.0)
-    
-    Note:
-        - whisker_width=1.5: Standard outlier detection (default)
-        - whisker_width=3.0: More conservative, detects only extreme outliers
     """
     df = df.copy()
     
@@ -140,14 +133,19 @@ def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5)
     if not pd.api.types.is_numeric_dtype(df[column]):
         raise TypeError(f"Column '{column}' must be numeric for outlier detection")
     
-    # Calculate quartiles and IQR
-    q1 = df[column].quantile(0.25)
-    q3 = df[column].quantile(0.75)
-    iqr = q3 - q1
-    
-    # Calculate boundaries
-    lower_bound = q1 - whisker_width * iqr
-    upper_bound = q3 + whisker_width * iqr
+    # Try to use pre-calculated boundaries from analysis_results
+    if analysis_results and 'outlier_info' in analysis_results:
+        outlier_info = analysis_results['outlier_info'].get(column, {})
+        if 'lower_bound' in outlier_info and 'upper_bound' in outlier_info:
+            lower_bound = outlier_info['lower_bound']
+            upper_bound = outlier_info['upper_bound']
+            print(f"Using pre-calculated boundaries from analysis: [{lower_bound:.2f}, {upper_bound:.2f}]")
+        else:
+            # Fallback to calculation
+            lower_bound, upper_bound = _calculate_iqr_bounds(df, column, whisker_width)
+    else:
+        # Calculate boundaries if not provided
+        lower_bound, upper_bound = _calculate_iqr_bounds(df, column, whisker_width)
     
     # Count outliers before clipping
     outliers_lower = (df[column] < lower_bound).sum()
@@ -166,19 +164,26 @@ def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5)
     return df
 
 
-def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5) -> pd.DataFrame:
+def _calculate_iqr_bounds(df: pd.DataFrame, column: str, whisker_width: float) -> tuple:
+    """Helper function to calculate IQR boundaries."""
+    q1 = df[column].quantile(0.25)
+    q3 = df[column].quantile(0.75)
+    iqr = q3 - q1
+    lower_bound = q1 - whisker_width * iqr
+    upper_bound = q3 + whisker_width * iqr
+    return lower_bound, upper_bound
+
+
+def remove_outliers_iqr(df: pd.DataFrame, column: str, analysis_results: dict = None, whisker_width: float = 1.5) -> pd.DataFrame:
     """
     Remove rows containing outliers using IQR method.
     
-    Outliers are detected using the IQR (Interquartile Range) method:
-    - Lower bound: Q1 - whisker_width * IQR
-    - Upper bound: Q3 + whisker_width * IQR
-    
-    Rows with values outside these bounds are deleted from the DataFrame.
+    Can use pre-calculated boundaries from analysis_results or calculate new ones.
     
     Args:
         df: Input DataFrame
         column: Column name to process
+        analysis_results: Optional analysis results containing pre-calculated boundaries
         whisker_width: Multiplier for IQR to define outlier boundaries.
                       Default is 1.5 (standard box plot definition)
     
@@ -186,7 +191,7 @@ def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.
         DataFrame with outlier rows removed
     
     Example:
-        >>> df = remove_outliers_iqr(df, 'Fare')
+        >>> df = remove_outliers_iqr(df, 'Fare', analysis_results)
         >>> df = remove_outliers_iqr(df, 'Age', whisker_width=2.0)
     
     Warning:
@@ -204,14 +209,19 @@ def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.
     
     original_rows = len(df)
     
-    # Calculate quartiles and IQR
-    q1 = df[column].quantile(0.25)
-    q3 = df[column].quantile(0.75)
-    iqr = q3 - q1
-    
-    # Calculate boundaries
-    lower_bound = q1 - whisker_width * iqr
-    upper_bound = q3 + whisker_width * iqr
+    # Try to use pre-calculated boundaries from analysis_results
+    if analysis_results and 'outlier_info' in analysis_results:
+        outlier_info = analysis_results['outlier_info'].get(column, {})
+        if 'lower_bound' in outlier_info and 'upper_bound' in outlier_info:
+            lower_bound = outlier_info['lower_bound']
+            upper_bound = outlier_info['upper_bound']
+            print(f"Using pre-calculated boundaries from analysis: [{lower_bound:.2f}, {upper_bound:.2f}]")
+        else:
+            # Fallback to calculation
+            lower_bound, upper_bound = _calculate_iqr_bounds(df, column, whisker_width)
+    else:
+        # Calculate boundaries if not provided
+        lower_bound, upper_bound = _calculate_iqr_bounds(df, column, whisker_width)
     
     # Identify outliers
     outliers_mask = (df[column] < lower_bound) | (df[column] > upper_bound)
