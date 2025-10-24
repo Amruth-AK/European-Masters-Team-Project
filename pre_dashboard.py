@@ -1,5 +1,8 @@
+<<<<<<< Updated upstream
 # pre_dashboard.py
 
+=======
+>>>>>>> Stashed changes
 import streamlit as st
 import pandas as pd
 from preprocessing_suggestions import (
@@ -54,11 +57,15 @@ def apply_suggestion(df, suggestion):
     kwargs = suggestion.get('kwargs', {})
     func = FUNC_MAP.get(func_name)
     if func:
-        return func(df, **kwargs)
+        try:
+            return func(df, **kwargs)
+        except Exception as e:
+            st.error(f"⚠️ Error applying {func_name} to {suggestion['feature']}: {e}")
     return df
 
 
 def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.DataFrame:
+<<<<<<< Updated upstream
     """
     Streamlit preprocessing dashboard that applies suggestions in order
     and returns the final preprocessed DataFrame.
@@ -73,6 +80,19 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         st.session_state.pre_steps_done = []
 
     # Safe preprocessing order
+=======
+    """Streamlit preprocessing dashboard with Apply/Ignore All buttons."""
+    st.title("🛠 Preprocessing Suggestions")
+
+    # Initialize session state
+    if 'pre_df' not in st.session_state or st.session_state.pre_df is None:
+        st.session_state.pre_df = df.copy()
+    if 'pre_status' not in st.session_state:
+        st.session_state.pre_status = None  
+    df = st.session_state.pre_df
+
+    # Collect all suggestions
+>>>>>>> Stashed changes
     steps = [
         ("Missing Values", suggest_missing_value_handling(analysis_results)),
         ("Duplicate Rows", suggest_duplicate_handling(analysis_results)),
@@ -80,7 +100,9 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Numerical Scaling", suggest_numerical_scaling(analysis_results)),
         ("Categorical Encoding", suggest_categorical_encoding(analysis_results))
     ]
+    valid_steps = [(name, sug) for name, sug in steps if sug]
 
+<<<<<<< Updated upstream
     for step_name, suggestions in steps:
         st.subheader(f"🔹 {step_name}")
 
@@ -109,6 +131,47 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
 
     st.subheader("✅ Final Preprocessed Dataset Preview")
     st.dataframe(df.head())
+=======
+    if not valid_steps:
+        st.success("No preprocessing suggestions found — your dataset looks clean!")
+        st.dataframe(df.head(), width='stretch')
+        return df
+
+    st.subheader("📋 Suggestions Summary")
+    for step_name, suggestions in valid_steps:
+        with st.expander(f"🔹 {step_name}", expanded=True):
+            for sug in suggestions:
+                st.markdown(f"**Attribute:** `{sug['feature']}`")
+                st.info(f"**Issue:** {sug['issue']}")
+                st.warning(f"**Suggestion:** {sug['suggestion']}")
+            st.divider()
+
+    # --- Buttons ---
+    if st.session_state.pre_status is None:
+        col1, col2 = st.columns([1, 1])
+        apply_all = col1.button("Apply All Suggestions", key="apply_all_btn", width='stretch')
+        ignore_all = col2.button("Ignore All Suggestions", key="ignore_all_btn", width='stretch')
+
+        if apply_all:
+            for _, suggestions in valid_steps:
+                for sug in suggestions:
+                    df = apply_suggestion(df, sug)
+            st.session_state.pre_df = df
+            st.session_state.pre_status = "applied"
+            st.rerun()
+
+        elif ignore_all:
+            st.session_state.pre_status = "ignored"
+            st.rerun()
+            
+    if st.session_state.pre_status == "applied":
+        st.success("All preprocessing steps applied successfully!")
+    elif st.session_state.pre_status == "ignored":
+        st.info("All preprocessing suggestions were ignored.")
+
+    st.subheader("📊 Final Preprocessed Dataset Preview")
+    st.dataframe(df.head(), width='stretch')
+>>>>>>> Stashed changes
 
     # Option to reset preprocessing
     if st.button("🔄 Reset Preprocessing"):

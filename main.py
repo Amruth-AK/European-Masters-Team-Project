@@ -107,7 +107,7 @@ elif selected_page == "Preprocessing Suggestions":
             st.session_state.analysis_results,
             st.session_state.df
         )
-        # You can use final_df for AutoGluon or further steps
+        
     else:
         st.warning("Please upload a dataset and run analysis on the Home page first.")
 
