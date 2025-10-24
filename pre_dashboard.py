@@ -28,115 +28,92 @@ from preprocessing_function import (
 )
 
 
+# Map string function names to actual functions
+FUNC_MAP = {
+    'delete_missing_columns': delete_missing_columns,
+    'delete_missing_rows': delete_missing_rows,
+    'impute_mean': impute_mean,
+    'impute_median': impute_median,
+    'impute_mode': impute_mode,
+    'delete_duplicates': delete_duplicates,
+    'standard_scaler': standard_scaler,
+    'minmax_scaler': minmax_scaler,
+    'clip_outliers_iqr': clip_outliers_iqr,
+    'remove_outliers_iqr': remove_outliers_iqr,
+    'binary_encode': binary_encode,
+    'ordinal_encode': ordinal_encode,
+    'one_hot_encode': one_hot_encode,
+    'label_encode': label_encode,
+    'frequency_encode': frequency_encode
+}
+
+
 def apply_suggestion(df, suggestion):
-    """
-    Calls the appropriate function from preprocessing_functions.py
-    """
+    """Apply a preprocessing function safely."""
     func_name = suggestion['function_to_call']
     kwargs = suggestion.get('kwargs', {})
-
-    # Map string function names to actual functions
-    func_map = {
-        'delete_missing_columns': delete_missing_columns,
-        'delete_missing_rows': delete_missing_rows,
-        'impute_mean': impute_mean,
-        'impute_median': impute_median,
-        'impute_mode': impute_mode,
-        'delete_duplicates': delete_duplicates,
-        'standard_scaler': standard_scaler,
-        'minmax_scaler': minmax_scaler,
-        'clip_outliers_iqr': clip_outliers_iqr,
-        'remove_outliers_iqr': remove_outliers_iqr,
-        'binary_encode': binary_encode,
-        'ordinal_encode': ordinal_encode,
-        'one_hot_encode': one_hot_encode,
-        'label_encode': label_encode,
-        'frequency_encode': frequency_encode
-    }
-
-    func = func_map.get(func_name)
+    func = FUNC_MAP.get(func_name)
     if func:
-        df = func(df, **kwargs)
+        return func(df, **kwargs)
     return df
 
 
-def create_preprocessing_dashboard(analysis_results: dict):
+def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.DataFrame:
     """
-    Streamlit page to show preprocessing suggestions and allow auto-application.
+    Streamlit preprocessing dashboard that applies suggestions in order
+    and returns the final preprocessed DataFrame.
     """
     st.title("🛠 Preprocessing Suggestions")
 
-    if 'df' not in st.session_state or st.session_state.df is None:
-        st.warning("Please upload a dataset and run analysis on the Home page first.")
-        return
+    # Copy df to avoid modifying the original
+    df = df.copy()
 
-    df = st.session_state.df
+    # Initialize session_state trackers for applied/skipped suggestions
+    if 'pre_steps_done' not in st.session_state:
+        st.session_state.pre_steps_done = []
 
-    # --- 1. Missing Values ---
-    st.subheader("1️⃣ Missing Values")
-    missing_suggestions = suggest_missing_value_handling(analysis_results)
-    if missing_suggestions:
-        for i, sug in enumerate(missing_suggestions):
+    # Safe preprocessing order
+    steps = [
+        ("Missing Values", suggest_missing_value_handling(analysis_results)),
+        ("Duplicate Rows", suggest_duplicate_handling(analysis_results)),
+        ("Outliers", suggest_outlier_handling(analysis_results)),
+        ("Numerical Scaling", suggest_numerical_scaling(analysis_results)),
+        ("Categorical Encoding", suggest_categorical_encoding(analysis_results))
+    ]
+
+    for step_name, suggestions in steps:
+        st.subheader(f"🔹 {step_name}")
+
+        if not suggestions:
+            st.info(f"No suggestions for {step_name}")
+            continue
+
+        for i, sug in enumerate(suggestions):
+            key_base = f"{step_name}_{i}"
+            already_done = key_base in st.session_state.pre_steps_done
+            if already_done:
+                st.info(f"✅ Already applied or skipped: {sug['feature']}")
+                continue
+
             st.markdown(f"**{sug['feature']}**: {sug['issue']}")
             st.info(sug['suggestion'])
-            if st.button(f"✅ Apply Suggestion ({sug['feature']})", key=f"missing_{i}"):
-                df = apply_suggestion(df, sug)
-                st.success(f"Applied suggestion for {sug['feature']}")
-    else:
-        st.success("No missing value suggestions!")
 
-    # --- 2. Duplicates ---
-    st.subheader("2️⃣ Duplicate Rows")
-    dup_suggestions = suggest_duplicate_handling(analysis_results)
-    if dup_suggestions:
-        for i, sug in enumerate(dup_suggestions):
-            st.markdown(f"**{sug['feature']}**: {sug['issue']}")
-            st.info(sug['suggestion'])
-            if st.button(f"✅ Apply Suggestion ({sug['feature']})", key=f"dup_{i}"):
+            col1, col2 = st.columns(2)
+            if col1.button(f"Apply ({sug['feature']})", key=f"apply_{key_base}"):
                 df = apply_suggestion(df, sug)
+                st.session_state.pre_steps_done.append(key_base)
                 st.success(f"Applied suggestion for {sug['feature']}")
-    else:
-        st.success("No duplicate suggestions!")
+            if col2.button(f"Skip ({sug['feature']})", key=f"skip_{key_base}"):
+                st.session_state.pre_steps_done.append(key_base)
+                st.info(f"Skipped suggestion for {sug['feature']}")
 
-    # --- 3. Outliers ---
-    st.subheader("3️⃣ Outliers")
-    outlier_suggestions = suggest_outlier_handling(analysis_results)
-    if outlier_suggestions:
-        for i, sug in enumerate(outlier_suggestions):
-            st.markdown(f"**{sug['feature']}**: {sug['issue']}")
-            st.info(sug['suggestion'])
-            if st.button(f"✅ Apply Suggestion ({sug['feature']})", key=f"outlier_{i}"):
-                df = apply_suggestion(df, sug)
-                st.success(f"Applied suggestion for {sug['feature']}")
-    else:
-        st.success("No outlier suggestions!")
+    st.subheader("✅ Final Preprocessed Dataset Preview")
+    st.dataframe(df.head())
 
-    # --- 4. Numerical Scaling ---
-    st.subheader("4️⃣ Numerical Scaling")
-    scale_suggestions = suggest_numerical_scaling(analysis_results)
-    if scale_suggestions:
-        for i, sug in enumerate(scale_suggestions):
-            st.markdown(f"**{sug['feature']}**: {sug['issue']}")
-            st.info(sug['suggestion'])
-            if st.button(f"✅ Apply Suggestion ({sug['feature']})", key=f"scale_{i}"):
-                df = apply_suggestion(df, sug)
-                st.success(f"Applied suggestion for {sug['feature']}")
-    else:
-        st.success("No scaling suggestions!")
+    # Option to reset preprocessing
+    if st.button("🔄 Reset Preprocessing"):
+        st.session_state.pre_steps_done = []
+        st.success("Preprocessing reset. You can start applying suggestions again.")
 
-    # --- 5. Categorical Encoding ---
-    st.subheader("5️⃣ Categorical Encoding")
-    cat_suggestions = suggest_categorical_encoding(analysis_results)
-    if cat_suggestions:
-        for i, sug in enumerate(cat_suggestions):
-            st.markdown(f"**{sug['feature']}**: {sug['issue']}")
-            st.info(sug['suggestion'])
-            if st.button(f"✅ Apply Suggestion ({sug['feature']})", key=f"cat_{i}"):
-                df = apply_suggestion(df, sug)
-                st.success(f"Applied suggestion for {sug['feature']}")
-    else:
-        st.success("No categorical encoding suggestions!")
-
-    # Update session state with the new DataFrame
-    st.session_state.df = df
-    st.success("✅ Preprocessing suggestions applied successfully. You can continue analysis with the updated dataset.")
+    # Return the final dataset
+    return df

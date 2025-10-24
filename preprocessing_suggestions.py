@@ -297,7 +297,7 @@ def suggest_categorical_encoding(analysis_results: dict) -> list:
                 'issue': f'Low-cardinality feature ({unique_count} unique values)',
                 'suggestion': 'Apply One-Hot Encoding to create binary columns for each category.',
                 'function_to_call': 'one_hot_encode',
-                'kwargs': {'columns': col, 'drop_first': True}
+                'kwargs': {'columns': col, 'drop_first': False}
             })
         
         # Rule 4: Medium cardinality (10–50)

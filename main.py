@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 from analyze import DataAnalyzer  # Corrected import name
 from dashboard import create_dashboard
-from pre_dashboard import create_preprocessing_dashboard
+from pre_dashboard import run_preprocessing_dashboard
 
 
 # --- Page Configuration ---
@@ -97,14 +97,25 @@ pages = [
 st.sidebar.title("Analysis Sections")
 selected_page = st.sidebar.radio("Go to", pages)
 
-# Display the selected page
 if selected_page == "Home":
     display_home_page()
-else:
-    if not st.session_state.analysis_results:
-        st.warning("Please upload a dataset and run the analysis on the 'Home' page first.")
-    elif selected_page == "Preprocessing Suggestions":
-        create_preprocessing_dashboard(st.session_state.analysis_results)
+
+elif selected_page == "Preprocessing Suggestions":
+    if st.session_state.analysis_results and st.session_state.df is not None:
+        # Call the new preprocessing dashboard and get the final dataset
+        final_df = run_preprocessing_dashboard(
+            st.session_state.analysis_results,
+            st.session_state.df
+        )
+        # You can use final_df for AutoGluon or further steps
     else:
+        st.warning("Please upload a dataset and run analysis on the Home page first.")
+
+else:
+    if st.session_state.analysis_results:
         create_dashboard(st.session_state.analysis_results, selected_page)
+    else:
+        st.warning("Please upload a dataset and run analysis on the Home page first.")
+
+
 
