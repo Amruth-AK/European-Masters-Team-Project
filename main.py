@@ -100,6 +100,6 @@ if selected_page == "Home":
 else:
     # Check if analysis has been run before showing other pages
     if st.session_state.analysis_results:
-        create_dashboard(st.session_state.analysis_results, selected_page)
+        create_dashboard(st.session_state.analysis_results)
     else:
         st.warning("Please upload a dataset and run the analysis on the 'Home' page first.")

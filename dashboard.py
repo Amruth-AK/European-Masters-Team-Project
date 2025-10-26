@@ -3,9 +3,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-import analysis2
-import analysis
-
 def create_dashboard(analysis_dict: dict):
     """
     Creates a more visual and interactive dashboard from the analysis dictionary.
@@ -126,15 +123,21 @@ def create_dashboard(analysis_dict: dict):
         st.plotly_chart(fig, use_container_width=True)
 
         st.markdown("#### Correlation with Target Column")
-        target_corr_df = pd.DataFrame.from_dict(analysis_dict['correlations']['target_correlation'], orient='index',
-                                                columns=['Correlation']).reset_index()
-        target_corr_df.columns = ['Feature', 'Correlation']
-        fig2 = px.bar(
-            target_corr_df.sort_values('Correlation', ascending=False),
-            x='Feature', y='Correlation', title='Feature Correlation with Target',
-            color='Correlation', color_continuous_scale='RdBu_r'
-        )
-        st.plotly_chart(fig2, use_container_width=True)
+        target_corr = analysis_dict['correlations']['target_correlation']
+        if not categorical_cols:
+            st.info("No categorical columns found.")
+        else:
+            selected_cat_col = st.selectbox("Select a Categorical Column", categorical_cols)
+            if selected_cat_col:
+                cat_info = analysis_dict['categorical_info'][selected_cat_col]
+                st.metric(f"Unique Values in {selected_cat_col}", cat_info['unique_values'])
+                value_counts_df = pd.DataFrame(list(cat_info['value_counts'].items()), columns=['Category', 'Count'])
+                plot_type = st.radio("Select plot type", ('Bar Chart', 'Pie Chart'))
+                if plot_type == 'Bar Chart':
+                    fig = px.bar(value_counts_df, x='Category', y='Count', title=f"Value Counts for {selected_cat_col}")
+                else:
+                    fig = px.pie(value_counts_df, names='Category', values='Count', title=f"Value Counts for {selected_cat_col}")
+                st.plotly_chart(fig, use_container_width=True)
 
     elif page == 'categorical_info':
         st.subheader("Categorical Column Analysis")
@@ -172,7 +175,7 @@ def create_dashboard(analysis_dict: dict):
 
 if __name__ == '__main__':
 
-    sample_df = pd.read_csv(r'C:\Users\adria\PycharmProjects\pythonProject3\train.csv')
+    sample_df = pd.read_csv(r'train.csv')
 
     # Paste the dictionary output from your analysis function here
     analysis_output = analyze.analysis(sample_df, 'accident_risk')
