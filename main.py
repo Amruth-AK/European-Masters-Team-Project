@@ -22,6 +22,8 @@ if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 if 'target_column' not in st.session_state:
     st.session_state.target_column = None
+if 'id_columns' not in st.session_state:
+    st.session_state.id_columns = []
 
 
 # --- Home Page Function ---
@@ -57,6 +59,12 @@ def display_home_page():
             "Select the target column for focused analysis (e.g., for correlations)",
             options=st.session_state.df.columns
         )
+        # NEW: ID Column Selection
+        st.session_state.id_columns = st.multiselect(
+            "Select identifier columns to exclude from duplicate row analysis (optional)",
+            options=st.session_state.df.columns,
+            help="Choose columns like 'ID', 'user_id', etc. The tool will check for duplicates based on all *other* columns."
+        )
 
         col1, col2 = st.columns([1, 5]) # Create columns for buttons
 
@@ -65,7 +73,8 @@ def display_home_page():
             with st.spinner('Performing comprehensive analysis... This might take a moment.'):
                 analyzer_instance = DataAnalyzer(
                     df=st.session_state.df,
-                    target_column=st.session_state.target_column
+                    target_column=st.session_state.target_column,
+                     id_columns_to_ignore=st.session_state.id_columns
                 )
                 st.session_state.analysis_results = analyzer_instance.run_full_analysis()
             st.success("Analysis Complete! Navigate to other sections using the sidebar.")
