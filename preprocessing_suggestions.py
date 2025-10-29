@@ -229,7 +229,7 @@ def suggest_outlier_handling(analysis_results: dict) -> list:
                     'issue': f'Contains {outlier_count} outliers ({outlier_percentage:.1f}% of data)',
                     'suggestion': 'Clip outliers to IQR boundaries to preserve all rows while limiting extreme values.',
                     'function_to_call': 'clip_outliers_iqr',
-                    'kwargs': {'column': col, 'whisker_width': 1.5}
+                    'kwargs': {'column': col, 'whisker_width': 1.5, 'analysis_results': analysis_results}
                 })
             
             # Rule 2: Large percentage of outliers (>=5%) -> consider removal
@@ -239,57 +239,12 @@ def suggest_outlier_handling(analysis_results: dict) -> list:
                     'issue': f'High proportion of outliers ({outlier_count} rows, {outlier_percentage:.1f}%)',
                     'suggestion': 'Consider removing outlier rows if dataset is sufficiently large.',
                     'function_to_call': 'remove_outliers_iqr',
-                    'kwargs': {'column': col, 'whisker_width': 1.5}
+                    'kwargs': {'column': col, 'whisker_width': 1.5, 'analysis_results': analysis_results}
                 })
     
     return suggestions
 
 
-def suggest_identifier_removal(analysis_results: dict) -> list:
-    """
-    Generate suggestions to remove identifier columns.
-    
-    Detection Rules:
-    1. Column name contains 'id', 'index', 'uid', 'key'
-    2. OR unique values = total rows (perfect identifier)
-    
-    Args:
-        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
-    
-    Returns:
-        list: Preprocessing suggestions for identifier removal
-    """
-    suggestions = []
-    
-    # Get data info
-    data_types = analysis_results.get('general_info', {}).get('data_types', {})
-    total_rows = analysis_results.get('general_info', {}).get('shape', [0])[0]
-    
-    # Keywords to detect
-    identifier_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
-    
-    for col in data_types.keys():
-        # Check 1: Name contains identifier keyword
-        is_identifier = any(keyword in col.lower() for keyword in identifier_keywords)
-        
-        # Check 2: High cardinality (unique values = total rows)
-        # This would require counting unique values, but we can estimate from data
-        is_high_cardinality = False
-        if total_rows > 0:
-            # We need to check uniqueness - this is approximate from analysis
-            pass  # Skip this check as it's not available in analysis_results
-        
-        # Rule: If detected as identifier, suggest removal
-        if is_identifier:
-            suggestions.append({
-                'feature': col,
-                'issue': f'Identifier column detected (column name suggests ID/key)',
-                'suggestion': 'Remove identifier column as it provides no predictive value and can harm model performance.',
-                'function_to_call': 'remove_identifier_columns',
-                'kwargs': {'pattern': 'id', 'max_unique_ratio': 0.95}
-            })
-    
-    return suggestions
 
 
 def suggest_categorical_encoding(analysis_results: dict) -> list:
@@ -368,3 +323,141 @@ def suggest_categorical_encoding(analysis_results: dict) -> list:
             })
     
     return suggestions
+
+def suggest_identifier_removal(analysis_results: dict) -> list:
+    """
+    Generate suggestions to remove identifier columns.
+    
+    Detection Rules:
+    1. Column name contains 'id', 'index', 'uid', 'key'
+    2. OR unique values > 95% of total rows (high cardinality)
+    
+    Args:
+        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
+    
+    Returns:
+        list: Preprocessing suggestions for identifier removal
+    """
+    suggestions = []
+    
+    # Get data info
+    data_types = analysis_results.get('general_info', {}).get('data_types', {})
+    total_rows = analysis_results.get('general_info', {}).get('shape', [0])[0]
+    
+    # Keywords to detect
+    identifier_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
+    
+    # Collect all identifier columns
+    identifier_cols = []
+    
+    for col in data_types.keys():
+        # Check 1: Name contains identifier keyword
+        is_identifier = any(keyword in col.lower() for keyword in identifier_keywords)
+        
+        # Check 2: High cardinality (>95% unique values)
+        is_high_cardinality = False
+        if total_rows > 0:
+            # Try to get unique count from feature_duplicate_info
+            feat_dup = analysis_results.get('feature_duplicate_info', {}).get(col, {})
+            if feat_dup:
+                duplicate_count = feat_dup.get('duplicate_count', 0)
+                unique_count = total_rows - duplicate_count
+                if unique_count / total_rows > 0.95:
+                    is_high_cardinality = True
+        
+        # Add to list if detected as identifier
+        if is_identifier or is_high_cardinality:
+            identifier_cols.append(col)
+    
+    # Only create ONE suggestion if any identifier columns found
+    # Because remove_identifier_columns processes all columns at once
+    if identifier_cols:
+        suggestions.append({
+            'feature': ', '.join(identifier_cols),
+            'issue': f'Identifier column(s) detected: {", ".join(identifier_cols)}',
+            'suggestion': 'Remove identifier columns as they provide no predictive value and can harm model performance.',
+            'function_to_call': 'remove_identifier_columns',
+            'kwargs': {'pattern': 'id', 'max_unique_ratio': 0.95}
+        })
+    
+    return suggestions
+
+
+
+def suggest_datetime_features(analysis_results: dict) -> list:
+    """
+    Generate suggestions for datetime feature engineering.
+    
+    Detects datetime columns and suggests extracting useful temporal features.
+    Most ML models cannot handle datetime objects directly, so we need to
+    convert them into numerical features.
+    
+    Args:
+        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
+    
+    Returns:
+        list: Preprocessing suggestions for datetime feature extraction
+    """
+    suggestions = []
+    
+    # Get data types
+    data_types = analysis_results.get('general_info', {}).get('data_types', {})
+    
+    # Detect datetime columns
+    datetime_cols = []
+    potential_datetime_cols = []
+    
+    for col, dtype in data_types.items():
+        # Check if already datetime type
+        if 'datetime' in dtype.lower():
+            datetime_cols.append(col)
+        # Check if might be datetime (object/string with date-like names)
+        elif 'object' in dtype:
+            if any(keyword in col.lower() for keyword in 
+                   ['date', 'time', 'timestamp', 'dt', 'datetime', 'day']):
+                potential_datetime_cols.append(col)
+    
+    # --- Rule 1: Extract features from confirmed datetime columns ---
+    for col in datetime_cols:
+        suggestions.append({
+            'feature': col,
+            'issue': f'Datetime column detected: {col}',
+            'suggestion': 'Extract temporal features (year, month, day, etc.) as most models cannot process datetime directly.',
+            'function_to_call': 'extract_datetime_features',
+            'kwargs': {
+                'column': col,
+                'features': ['year', 'month', 'day', 'dayofweek', 'quarter', 'is_weekend'],
+                'drop_original': True
+            }
+        })
+    
+    # --- Rule 2: Suggest checking potential datetime columns ---
+    if potential_datetime_cols:
+        suggestions.append({
+            'feature': ', '.join(potential_datetime_cols),
+            'issue': f'Potential datetime columns detected (currently string/object type): {", ".join(potential_datetime_cols)}',
+            'suggestion': 'Verify if these are datetime columns and convert them. Then extract temporal features.',
+            'function_to_call': 'extract_datetime_features',
+            'kwargs': {
+                'column': potential_datetime_cols[0] if potential_datetime_cols else '',
+                'features': ['year', 'month', 'day', 'dayofweek'],
+                'drop_original': True
+            }
+        })
+    
+    # --- Rule 3: Suggest time difference if multiple datetime columns exist ---
+    if len(datetime_cols) >= 2:
+        suggestions.append({
+            'feature': f'{datetime_cols[0]}, {datetime_cols[1]}',
+            'issue': f'Multiple datetime columns found: {", ".join(datetime_cols)}',
+            'suggestion': 'Consider calculating time differences between datetime columns to create duration features.',
+            'function_to_call': 'calculate_datetime_diff',
+            'kwargs': {
+                'col1': datetime_cols[0],
+                'col2': datetime_cols[1],
+                'unit': 'days',
+                'new_col_name': None
+            }
+        })
+    
+    return suggestions    
