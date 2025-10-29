@@ -461,3 +461,85 @@ def suggest_datetime_features(analysis_results: dict) -> list:
         })
     
     return suggestions    
+
+
+
+
+# ============================================================================
+# Ignore Target Columns
+# While use it in main.py or dashboard.py
+# suggestions = get_all_suggestions(analysis_results, target_column='accident_risk')
+# ============================================================================
+
+
+def filter_target_from_suggestions(suggestions: list, target_column: str = None) -> list:
+    """
+    Remove any suggestions that involve the target column.
+    
+    This ensures the target variable is never modified during preprocessing.
+    
+    Args:
+        suggestions: List of suggestion dictionaries
+        target_column: Name of the target column to exclude
+    
+    Returns:
+        Filtered list of suggestions without target column
+    
+    Example:
+        >>> all_suggestions = suggest_missing_value_handling(results)
+        >>> filtered = filter_target_from_suggestions(all_suggestions, 'price')
+    """
+    if not target_column:
+        return suggestions
+    
+    filtered = []
+    for suggestion in suggestions:
+        feature = suggestion.get('feature', '')
+        
+        # Check if this suggestion involves the target column
+        # Handle both single column and comma-separated multiple columns
+        if ',' in feature:
+            # Multiple columns case (e.g., "col1, col2")
+            columns = [col.strip() for col in feature.split(',')]
+            if target_column not in columns:
+                filtered.append(suggestion)
+        else:
+            # Single column case
+            if feature != target_column:
+                filtered.append(suggestion)
+    
+    return filtered
+
+
+def get_all_suggestions(analysis_results: dict, target_column: str = None) -> list:
+    """
+    Generate all preprocessing suggestions and automatically filter out target column.
+    
+    This is a convenience function that calls all suggestion functions and filters
+    the results in one go.
+    
+    Args:
+        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
+        target_column: Name of target column to exclude from all suggestions
+    
+    Returns:
+        Complete list of filtered preprocessing suggestions
+    
+    Example:
+        >>> suggestions = get_all_suggestions(analysis_results, target_column='accident_risk')
+    """
+    all_suggestions = []
+    
+    # Collect all suggestions
+    all_suggestions.extend(suggest_missing_value_handling(analysis_results))
+    all_suggestions.extend(suggest_duplicate_handling(analysis_results))
+    all_suggestions.extend(suggest_numerical_scaling(analysis_results))
+    all_suggestions.extend(suggest_outlier_handling(analysis_results))
+    all_suggestions.extend(suggest_identifier_removal(analysis_results))
+    all_suggestions.extend(suggest_datetime_features(analysis_results))
+    all_suggestions.extend(suggest_categorical_encoding(analysis_results))
+    
+    # Filter out target column
+    return filter_target_from_suggestions(all_suggestions, target_column)
+
+
