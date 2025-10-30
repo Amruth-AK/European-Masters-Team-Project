@@ -6,8 +6,7 @@ import pandas as pd
 from analyze import DataAnalyzer
 from dashboard import create_dashboard
 from pre_dashboard import run_preprocessing_dashboard
-from model_sugestion import run_model_suggestions  # 🆕 new module import
-
+from model_suggestion import run_model_suggestions  
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Interactive Data Analysis Tool",
