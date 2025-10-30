@@ -1,11 +1,15 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+
 from preprocessing_suggestions import (
     suggest_missing_value_handling,
     suggest_duplicate_handling,
     suggest_outlier_handling,
     suggest_numerical_scaling,
-    suggest_categorical_encoding
+    suggest_categorical_encoding,
+    suggest_identifier_removal,
+    suggest_datetime_features
 )
 from preprocessing_function import (
     delete_missing_columns,
@@ -22,7 +26,10 @@ from preprocessing_function import (
     ordinal_encode,
     one_hot_encode,
     label_encode,
-    frequency_encode
+    frequency_encode,
+    remove_identifier_columns,
+    calculate_datetime_diff,
+    extract_datetime_features
 )
 
 # Map string function names to actual functions
@@ -41,7 +48,10 @@ FUNC_MAP = {
     'ordinal_encode': ordinal_encode,
     'one_hot_encode': one_hot_encode,
     'label_encode': label_encode,
-    'frequency_encode': frequency_encode
+    'frequency_encode': frequency_encode,
+    'remove_identifier_columns' : remove_identifier_columns,
+    'calculate_datetime_diff': calculate_datetime_diff,
+    'extract_datetime_features': extract_datetime_features
 }
 
 
@@ -65,7 +75,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
     if 'pre_df' not in st.session_state or st.session_state.pre_df is None:
         st.session_state.pre_df = df.copy()
     if 'pre_status' not in st.session_state:
-        st.session_state.pre_status = None  # Tracks 'applied' or 'ignored'
+        st.session_state.pre_status = None  
     df = st.session_state.pre_df
 
     # Collect all suggestions
@@ -74,7 +84,9 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Duplicate Rows", suggest_duplicate_handling(analysis_results)),
         ("Outliers", suggest_outlier_handling(analysis_results)),
         ("Numerical Scaling", suggest_numerical_scaling(analysis_results)),
-        ("Categorical Encoding", suggest_categorical_encoding(analysis_results))
+        ("Categorical Encoding", suggest_categorical_encoding(analysis_results)),
+        ("Datetime Feature Engineering", suggest_datetime_features(analysis_results)),
+        ("Identifier Removal", suggest_identifier_removal(analysis_results))
     ]
     valid_steps = [(name, sug) for name, sug in steps if sug]
 
@@ -91,7 +103,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
                 st.warning(f"**Suggestion:** {sug['suggestion']}")
             st.divider()
 
-    # --- Buttons (only if no decision yet) ---
+    # Buttons 
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
         apply_all = col1.button("Apply All Suggestions", key="apply_all_btn", width='stretch')
@@ -118,3 +130,5 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
     st.dataframe(df.head(), width='stretch')
 
     return df
+
+

@@ -251,7 +251,9 @@ def minmax_scaler(df: pd.DataFrame, column: Union[str, List[str]],
 # Outlier Handling - Zhiqi
 # ============================================================================
 
-def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5) -> pd.DataFrame:
+def clip_outliers_iqr(df: pd.DataFrame, column: str, 
+                     whisker_width: float = 1.5,
+                     analysis_results: dict = None) -> pd.DataFrame:
     """
     Cap/clip outliers using IQR method - replaces outliers with boundary values.
     
@@ -266,6 +268,8 @@ def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5)
         column: Column name to process
         whisker_width: Multiplier for IQR to define outlier boundaries. 
                       Default is 1.5 (standard box plot definition)
+        analysis_results: Optional dict from DataAnalyzer with pre-calculated bounds.
+                         If provided and contains bounds for this column, uses those.
     
     Returns:
         DataFrame with outliers clipped to boundary values
@@ -273,6 +277,7 @@ def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5)
     Example:
         >>> df = clip_outliers_iqr(df, 'Fare')
         >>> df = clip_outliers_iqr(df, 'Age', whisker_width=2.0)
+        >>> df = clip_outliers_iqr(df, 'Age', analysis_results=analysis_dict)
     
     Note:
         - whisker_width=1.5: Standard outlier detection (default)
@@ -287,14 +292,26 @@ def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5)
     if not pd.api.types.is_numeric_dtype(df[column]):
         raise TypeError(f"Column '{column}' must be numeric for outlier detection")
     
-    # Calculate quartiles and IQR
-    q1 = df[column].quantile(0.25)
-    q3 = df[column].quantile(0.75)
-    iqr = q3 - q1
-    
-    # Calculate boundaries
-    lower_bound = q1 - whisker_width * iqr
-    upper_bound = q3 + whisker_width * iqr
+    # Try to use pre-calculated boundaries from analysis_results
+    if analysis_results and 'outlier_info' in analysis_results:
+        col_outlier_info = analysis_results['outlier_info'].get(column, {})
+        if 'lower_bound' in col_outlier_info and 'upper_bound' in col_outlier_info:
+            lower_bound = col_outlier_info['lower_bound']
+            upper_bound = col_outlier_info['upper_bound']
+        else:
+            # Calculate boundaries ourselves
+            q1 = df[column].quantile(0.25)
+            q3 = df[column].quantile(0.75)
+            iqr = q3 - q1
+            lower_bound = q1 - whisker_width * iqr
+            upper_bound = q3 + whisker_width * iqr
+    else:
+        # Calculate boundaries ourselves
+        q1 = df[column].quantile(0.25)
+        q3 = df[column].quantile(0.75)
+        iqr = q3 - q1
+        lower_bound = q1 - whisker_width * iqr
+        upper_bound = q3 + whisker_width * iqr
     
     # Count outliers before clipping
     outliers_lower = (df[column] < lower_bound).sum()
@@ -313,7 +330,9 @@ def clip_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5)
     return df
 
 
-def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.5) -> pd.DataFrame:
+def remove_outliers_iqr(df: pd.DataFrame, column: str, 
+                       whisker_width: float = 1.5,
+                       analysis_results: dict = None) -> pd.DataFrame:
     """
     Remove rows containing outliers using IQR method.
     
@@ -328,6 +347,8 @@ def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.
         column: Column name to process
         whisker_width: Multiplier for IQR to define outlier boundaries.
                       Default is 1.5 (standard box plot definition)
+        analysis_results: Optional dict from DataAnalyzer with pre-calculated bounds.
+                         If provided and contains bounds for this column, uses those.
     
     Returns:
         DataFrame with outlier rows removed
@@ -335,6 +356,7 @@ def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.
     Example:
         >>> df = remove_outliers_iqr(df, 'Fare')
         >>> df = remove_outliers_iqr(df, 'Age', whisker_width=2.0)
+        >>> df = remove_outliers_iqr(df, 'Age', analysis_results=analysis_dict)
     
     Warning:
         This method permanently removes rows from the dataset. 
@@ -351,14 +373,26 @@ def remove_outliers_iqr(df: pd.DataFrame, column: str, whisker_width: float = 1.
     
     original_rows = len(df)
     
-    # Calculate quartiles and IQR
-    q1 = df[column].quantile(0.25)
-    q3 = df[column].quantile(0.75)
-    iqr = q3 - q1
-    
-    # Calculate boundaries
-    lower_bound = q1 - whisker_width * iqr
-    upper_bound = q3 + whisker_width * iqr
+    # Try to use pre-calculated boundaries from analysis_results
+    if analysis_results and 'outlier_info' in analysis_results:
+        col_outlier_info = analysis_results['outlier_info'].get(column, {})
+        if 'lower_bound' in col_outlier_info and 'upper_bound' in col_outlier_info:
+            lower_bound = col_outlier_info['lower_bound']
+            upper_bound = col_outlier_info['upper_bound']
+        else:
+            # Calculate boundaries ourselves
+            q1 = df[column].quantile(0.25)
+            q3 = df[column].quantile(0.75)
+            iqr = q3 - q1
+            lower_bound = q1 - whisker_width * iqr
+            upper_bound = q3 + whisker_width * iqr
+    else:
+        # Calculate boundaries ourselves
+        q1 = df[column].quantile(0.25)
+        q3 = df[column].quantile(0.75)
+        iqr = q3 - q1
+        lower_bound = q1 - whisker_width * iqr
+        upper_bound = q3 + whisker_width * iqr
     
     # Identify outliers
     outliers_mask = (df[column] < lower_bound) | (df[column] > upper_bound)
@@ -557,4 +591,226 @@ def frequency_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.Dat
         freq = df[col].value_counts(normalize=True)
         df[col] = df[col].map(freq)
 
+    return df
+
+# ============================================================================
+# Identifier Column Removal - Zhiqi
+# ============================================================================
+
+def remove_identifier_columns(df: pd.DataFrame, 
+                             pattern: str = 'id',
+                             max_unique_ratio: float = 0.95) -> pd.DataFrame:
+    """
+    Automatically remove identifier/id-like columns (e.g., id, index, uid).
+    
+    Detection Logic:
+    1. Column name contains 'id' (or specified pattern)
+    2. OR unique values > 95% of total rows (high cardinality)
+    
+    Args:
+        df: Input DataFrame
+        pattern: Keyword to search in column names (case-insensitive)
+        max_unique_ratio: Threshold for unique value ratio (0.95 = 95%)
+    
+    Returns:
+        DataFrame with identifier columns removed
+    
+    Example:
+        >>> df = remove_identifier_columns(df)
+        >>> df = remove_identifier_columns(df, pattern='key', max_unique_ratio=0.99)
+    """
+    df = df.copy()
+    to_remove = []
+    identifier_keywords = ['id', 'index', 'uid', 'key', 'identifier', 'pk']
+    
+    for col in df.columns:
+        
+        if any(kw == col.lower() or col.lower().endswith(f"_{kw}") for kw in identifier_keywords):
+            to_remove.append(col)
+            continue
+
+        
+        # Check 2: High unique ratio
+        unique_ratio = df[col].nunique() / len(df)
+        if unique_ratio > max_unique_ratio:
+            to_remove.append(col)
+    
+    if to_remove:
+        df = df.drop(columns=to_remove)
+        print(f"Removed identifier columns: {to_remove}")
+    
+    return df
+
+
+# ============================================================================
+# Datetime Feature Engineering - Zhiqi
+# ============================================================================
+
+def extract_datetime_features(df: pd.DataFrame, 
+                              column: str,
+                              features: List[str] = None,
+                              drop_original: bool = True) -> pd.DataFrame:
+    """
+    Extract useful features from datetime columns.
+    
+    Converts datetime column into multiple numerical features that models can use.
+    
+    Args:
+        df: Input DataFrame
+        column: Datetime column name to process
+        features: List of features to extract. Available options:
+                 ['year', 'month', 'day', 'dayofweek', 'quarter', 
+                  'hour', 'minute', 'is_weekend', 'is_month_start', 'is_month_end']
+                 If None, extracts all available features.
+        drop_original: Whether to drop the original datetime column (default True)
+    
+    Returns:
+        DataFrame with datetime features extracted
+    
+    Example:
+        >>> df = extract_datetime_features(df, 'date')
+        >>> df = extract_datetime_features(df, 'timestamp', features=['year', 'month', 'hour'])
+        >>> df = extract_datetime_features(df, 'date', drop_original=False)
+    
+    Note:
+        The column must be datetime type or convertible to datetime.
+        Most ML models cannot handle datetime directly, so this converts them to numbers.
+    """
+    df = df.copy()
+    
+    if column not in df.columns:
+        raise ValueError(f"Column '{column}' not found in DataFrame")
+    
+    # Try to convert to datetime if not already
+    if not pd.api.types.is_datetime64_any_dtype(df[column]):
+        try:
+            df[column] = pd.to_datetime(df[column])
+            print(f"Converted column '{column}' to datetime type")
+        except Exception as e:
+            raise TypeError(f"Column '{column}' cannot be converted to datetime: {e}")
+    
+    # Default: extract all features
+    if features is None:
+        features = ['year', 'month', 'day', 'dayofweek', 'quarter', 
+                   'hour', 'minute', 'is_weekend', 'is_month_start', 'is_month_end']
+    
+    # Extract requested features
+    extracted_count = 0
+    
+    if 'year' in features:
+        df[f'{column}_year'] = df[column].dt.year
+        extracted_count += 1
+    
+    if 'month' in features:
+        df[f'{column}_month'] = df[column].dt.month
+        extracted_count += 1
+    
+    if 'day' in features:
+        df[f'{column}_day'] = df[column].dt.day
+        extracted_count += 1
+    
+    if 'dayofweek' in features:
+        df[f'{column}_dayofweek'] = df[column].dt.dayofweek  # Monday=0, Sunday=6
+        extracted_count += 1
+    
+    if 'quarter' in features:
+        df[f'{column}_quarter'] = df[column].dt.quarter
+        extracted_count += 1
+    
+    if 'hour' in features:
+        try:
+            df[f'{column}_hour'] = df[column].dt.hour
+            extracted_count += 1
+        except AttributeError:
+            pass  # Skip if datetime doesn't have time component
+    
+    if 'minute' in features:
+        try:
+            df[f'{column}_minute'] = df[column].dt.minute
+            extracted_count += 1
+        except AttributeError:
+            pass
+    
+    if 'is_weekend' in features:
+        df[f'{column}_is_weekend'] = (df[column].dt.dayofweek >= 5).astype(int)  # 5=Sat, 6=Sun
+        extracted_count += 1
+    
+    if 'is_month_start' in features:
+        df[f'{column}_is_month_start'] = df[column].dt.is_month_start.astype(int)
+        extracted_count += 1
+    
+    if 'is_month_end' in features:
+        df[f'{column}_is_month_end'] = df[column].dt.is_month_end.astype(int)
+        extracted_count += 1
+    
+    print(f"Extracted {extracted_count} datetime features from column '{column}'")
+    
+    # Drop original datetime column if requested
+    if drop_original:
+        df = df.drop(columns=[column])
+        print(f"Dropped original datetime column '{column}'")
+    
+    return df
+
+
+def calculate_datetime_diff(df: pd.DataFrame, 
+                           col1: str, 
+                           col2: str,
+                           unit: str = 'days',
+                           new_col_name: str = None) -> pd.DataFrame:
+    """
+    Calculate time difference between two datetime columns.
+    
+    Useful for features like "days_since_registration", "hours_between_events", etc.
+    
+    Args:
+        df: Input DataFrame
+        col1: First datetime column (later/end time)
+        col2: Second datetime column (earlier/start time)
+        unit: Unit for difference calculation. Options:
+              'days', 'hours', 'minutes', 'seconds'
+        new_col_name: Name for the new difference column.
+                     If None, uses format '{col1}_minus_{col2}_{unit}'
+    
+    Returns:
+        DataFrame with new time difference column
+    
+    Example:
+        >>> df = calculate_datetime_diff(df, 'end_date', 'start_date', unit='days')
+        >>> df = calculate_datetime_diff(df, 'current_time', 'signup_time', 
+                                        unit='hours', new_col_name='hours_since_signup')
+    """
+    df = df.copy()
+    
+    if col1 not in df.columns or col2 not in df.columns:
+        raise ValueError(f"Columns '{col1}' or '{col2}' not found in DataFrame")
+    
+    # Convert to datetime if needed
+    if not pd.api.types.is_datetime64_any_dtype(df[col1]):
+        df[col1] = pd.to_datetime(df[col1])
+    if not pd.api.types.is_datetime64_any_dtype(df[col2]):
+        df[col2] = pd.to_datetime(df[col2])
+    
+    # Calculate difference
+    time_diff = df[col1] - df[col2]
+    
+    # Convert to requested unit
+    if unit == 'days':
+        result = time_diff.dt.days
+    elif unit == 'hours':
+        result = time_diff.dt.total_seconds() / 3600
+    elif unit == 'minutes':
+        result = time_diff.dt.total_seconds() / 60
+    elif unit == 'seconds':
+        result = time_diff.dt.total_seconds()
+    else:
+        raise ValueError(f"Invalid unit '{unit}'. Use 'days', 'hours', 'minutes', or 'seconds'")
+    
+    # Create new column
+    if new_col_name is None:
+        new_col_name = f'{col1}_minus_{col2}_{unit}'
+    
+    df[new_col_name] = result
+    print(f"Created time difference column '{new_col_name}' ({unit})")
+    
     return df
