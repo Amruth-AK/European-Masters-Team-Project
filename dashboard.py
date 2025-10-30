@@ -141,9 +141,22 @@ def create_dashboard(analysis_dict: dict, page: str):
     elif page == 'Duplicate Analysis':
         st.subheader("Duplicate Row Analysis")
         row_info = analysis_dict['row_duplicate_info']
+        
+        # --- NEW: Inform user about ignored columns ---
+        ignored_cols = row_info.get('ignored_columns')
+        if ignored_cols:
+            st.info(f"The following identifier columns were excluded from this analysis: `{'`, `'.join(ignored_cols)}`")
+        
         col1, col2 = st.columns(2)
-        col1.metric("Total Duplicate Rows", row_info.get('total_row_duplicates', 0))
-        col2.metric("Duplicate Row Percentage", f"{row_info.get('duplicate_row_percentage', 0):.2f}%")
+        # --- UPDATED: Use the correct keys from the new analysis results ---
+        col1.metric("Total Duplicate Rows", row_info.get('total_duplicates', 0))
+        col2.metric("Duplicate Row Percentage", f"{row_info.get('duplicate_percentage', 0):.2f}%")
+        
+        # Display sample of duplicate rows if they exist
+        if row_info.get('total_duplicates', 0) > 0:
+            st.write("Sample of duplicate rows found:")
+            st.dataframe(pd.DataFrame(row_info['duplicate_rows']).head())
+
         st.subheader("Duplicate Value Analysis (per Feature)")
         feature_dup_df = pd.DataFrame.from_dict(analysis_dict['feature_duplicate_info'], orient='index').reset_index()
         feature_dup_df.columns = ['Column', 'Duplicate Count', 'Duplicate %', 'Most Frequent Value', 'Most Frequent Count']

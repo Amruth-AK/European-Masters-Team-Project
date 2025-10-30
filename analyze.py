@@ -1,12 +1,13 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import skew
-
+from typing import List, Optional 
 
 class DataAnalyzer:
-    def __init__(self, df: pd.DataFrame, target_column: str):
+    def __init__(self, df: pd.DataFrame, target_column: str, id_columns_to_ignore: Optional[List[str]] = None):
         self.df = df.copy()
         self.target_column = target_column
+        self.id_columns_to_ignore = id_columns_to_ignore if id_columns_to_ignore is not None else []
         self.results = {
             'general_info': {},
             'missing_values': {},
@@ -116,11 +117,41 @@ class DataAnalyzer:
 
     # --- 6. Duplicate Analysis ---
     def analyze_row_duplicates(self):
-        duplicate_rows = self.df[self.df.duplicated()]
-        self.results['duplicate_info'] = {
-            'total_duplicates': len(duplicate_rows),
-            'duplicate_percentage': (len(duplicate_rows) / len(self.df)) * 100,
-            'duplicate_rows': duplicate_rows.to_dict('records')
+        # Determine the columns to check for duplicates
+        if self.id_columns_to_ignore:
+            # Create a temporary DataFrame without the ignored columns
+            df_for_duplicates_check = self.df.drop(columns=self.id_columns_to_ignore)
+            print(f"Ignoring columns for duplicate check: {self.id_columns_to_ignore}")
+        else:
+            # Use the full DataFrame if no columns are specified to be ignored
+            df_for_duplicates_check = self.df
+            print("Checking for duplicates across all columns.")
+        print(self.id_columns_to_ignore)
+        print("we")
+        # --- LOGIC FIX STARTS HERE ---
+
+        # 1. Use keep=False to mark ALL occurrences of duplicates as True.
+        # This makes it easier to identify and group them.
+        duplicate_mask = df_for_duplicates_check.duplicated(keep=False)
+
+        # 2. Get the actual duplicated rows from the original DataFrame using the mask.
+        # This correctly handles any index misalignments.
+        duplicate_rows_df = self.df[duplicate_mask]
+        
+        # 3. The total number of duplicate rows is simply the length of this new DataFrame.
+        num_duplicates = len(duplicate_rows_df)
+        total_rows = len(self.df)
+        
+        # --- LOGIC FIX ENDS HERE ---
+
+        self.results['row_duplicate_info'] = {
+            'total_duplicates': num_duplicates,
+            'duplicate_percentage': (num_duplicates / total_rows) * 100 if total_rows > 0 else 0,
+            # We sort by the columns used for checking to group duplicates together visually
+            'duplicate_rows': duplicate_rows_df.sort_values(
+                by=list(df_for_duplicates_check.columns)
+            ).to_dict('records'),
+            'ignored_columns': self.id_columns_to_ignore
         }
         return self
 

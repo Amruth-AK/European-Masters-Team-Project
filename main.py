@@ -26,6 +26,8 @@ if 'pre_status' not in st.session_state:
     st.session_state.pre_status = None
 if 'pre_df' not in st.session_state:
     st.session_state.pre_df = None
+if 'id_columns' not in st.session_state:
+    st.session_state.id_columns = []
 
 
 # --- Home Page ---
@@ -61,6 +63,12 @@ def display_home_page():
             "🎯 Select the target column for analysis (e.g., prediction target)",
             options=st.session_state.df.columns
         )
+        # NEW: ID Column Selection
+        st.session_state.id_columns = st.multiselect(
+            "Select identifier columns to exclude from duplicate row analysis (optional)",
+            options=st.session_state.df.columns,
+            help="Choose columns like 'ID', 'user_id', etc. The tool will check for duplicates based on all *other* columns."
+        )
 
         col1, col2 = st.columns([1, 1])
 
@@ -69,7 +77,8 @@ def display_home_page():
             with st.spinner("Running comprehensive analysis..."):
                 analyzer_instance = DataAnalyzer(
                     df=st.session_state.df,
-                    target_column=st.session_state.target_column
+                    target_column=st.session_state.target_column,
+                     id_columns_to_ignore=st.session_state.id_columns
                 )
                 st.session_state.analysis_results = analyzer_instance.run_full_analysis()
             st.success("✅ Analysis complete! Use the sidebar to explore results.")
