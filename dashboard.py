@@ -5,6 +5,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
+
 def create_dashboard(analysis_dict: dict, page: str):
     """
     Renders the specific analysis page requested by the user.
@@ -165,3 +166,5 @@ def create_dashboard(analysis_dict: dict, page: str):
         )
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(feature_dup_df)
+
+
