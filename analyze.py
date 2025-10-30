@@ -128,7 +128,6 @@ class DataAnalyzer:
             print("Checking for duplicates across all columns.")
         print(self.id_columns_to_ignore)
         print("we")
-        # --- LOGIC FIX STARTS HERE ---
 
         # 1. Use keep=False to mark ALL occurrences of duplicates as True.
         # This makes it easier to identify and group them.
@@ -141,8 +140,6 @@ class DataAnalyzer:
         # 3. The total number of duplicate rows is simply the length of this new DataFrame.
         num_duplicates = len(duplicate_rows_df)
         total_rows = len(self.df)
-        
-        # --- LOGIC FIX ENDS HERE ---
 
         self.results['row_duplicate_info'] = {
             'total_duplicates': num_duplicates,
@@ -187,8 +184,8 @@ class DataAnalyzer:
          .analyze_missing_values()
          .analyze_numerical()
          .analyze_categorical()
-         .analyze_row_duplicates()  # Renamed method call
-         .analyze_feature_duplicates())  # New method call
+         .analyze_row_duplicates()  
+         .analyze_feature_duplicates()) 
         return self.results
 
 

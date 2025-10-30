@@ -1,5 +1,3 @@
-# model_suggestion.py
-#comment
 import pandas as pd
 import streamlit as st
 from autogluon.tabular import TabularPredictor
@@ -49,7 +47,7 @@ def run_model_suggestions(df: pd.DataFrame, target_column: str, time_limit: int 
 
     # --- Dynamic time limit ---
     if time_limit is None:
-        time_limit = max(60, min(600, n_rows // 10))
+        time_limit = 60
 
     st.info(f"Training models: {model_list} for up to {time_limit} seconds total...")
 

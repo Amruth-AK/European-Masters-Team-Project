@@ -1,5 +1,3 @@
-# dashboard.py
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -142,13 +140,11 @@ def create_dashboard(analysis_dict: dict, page: str):
         st.subheader("Duplicate Row Analysis")
         row_info = analysis_dict['row_duplicate_info']
         
-        # --- NEW: Inform user about ignored columns ---
         ignored_cols = row_info.get('ignored_columns')
         if ignored_cols:
             st.info(f"The following identifier columns were excluded from this analysis: `{'`, `'.join(ignored_cols)}`")
         
         col1, col2 = st.columns(2)
-        # --- UPDATED: Use the correct keys from the new analysis results ---
         col1.metric("Total Duplicate Rows", row_info.get('total_duplicates', 0))
         col2.metric("Duplicate Row Percentage", f"{row_info.get('duplicate_percentage', 0):.2f}%")
         

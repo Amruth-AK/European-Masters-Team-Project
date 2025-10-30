@@ -75,7 +75,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
     if 'pre_df' not in st.session_state or st.session_state.pre_df is None:
         st.session_state.pre_df = df.copy()
     if 'pre_status' not in st.session_state:
-        st.session_state.pre_status = None  # Tracks 'applied' or 'ignored'
+        st.session_state.pre_status = None  
     df = st.session_state.pre_df
 
     # Collect all suggestions
@@ -103,7 +103,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
                 st.warning(f"**Suggestion:** {sug['suggestion']}")
             st.divider()
 
-    # --- Buttons (only if no decision yet) ---
+    # Buttons 
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
         apply_all = col1.button("Apply All Suggestions", key="apply_all_btn", width='stretch')

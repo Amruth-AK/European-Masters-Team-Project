@@ -1,4 +1,3 @@
-# main.py
 import sys
 print(sys.executable)
 import streamlit as st
@@ -62,7 +61,7 @@ def display_home_page():
             "🎯 Select the target column for analysis (e.g., prediction target)",
             options=st.session_state.df.columns
         )
-        # NEW: ID Column Selection
+        # ID Column Selection
         st.session_state.id_columns = st.multiselect(
             "Select identifier columns to exclude from duplicate row analysis (optional)",
             options=st.session_state.df.columns,
@@ -101,7 +100,7 @@ pages = [
     "Outlier Info",
     "Duplicate Analysis",
     "Preprocessing Suggestions",
-    "Model Suggestions"  # 🆕 added page
+    "Model Suggestions"  
 ]
 
 st.sidebar.title("📚 Navigation")
