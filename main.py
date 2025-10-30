@@ -125,8 +125,26 @@ elif selected_page == "Preprocessing Suggestions":
 
 elif selected_page == "Model Suggestions":
     if st.session_state.df is not None and st.session_state.target_column:
-        st.info("💡 Comparing multiple models to find the best one...")
-        run_model_suggestions(st.session_state.df, st.session_state.target_column)
+        
+        # ✅ Ensure preprocessing has been finalized first
+        if st.session_state.pre_status not in ["applied", "ignored"]:
+            st.warning("⚠️ Please finish preprocessing first by applying or ignoring the suggestions.")
+        
+        else:
+            # ✅ Run model suggestions only once per preprocessing decision
+            if "model_results" not in st.session_state or st.session_state.model_results is None:
+                st.info("💡 Comparing multiple models to find the best one...")
+                st.session_state.model_results = run_model_suggestions(
+                    st.session_state.df,
+                    st.session_state.target_column
+                )
+            else:
+                st.success("✅ Model training already completed. Showing previous results.")
+                model_results = st.session_state.model_results
+
+                if model_results and "leaderboard" in model_results:
+                    st.dataframe(model_results["leaderboard"])
+                    st.write(f"**Best model:** {model_results['best_model']}")
     else:
         st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
 
