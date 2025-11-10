@@ -1046,3 +1046,42 @@ def create_features_from_correlation_analysis(
         analysis_results=analysis_results, 
         **kwargs
     )
+    
+    
+def combine_categorical_features(df: pd.DataFrame,
+                                 columns_to_combine: List[str],
+                                 new_col_name: str,
+                                 separator: str = '_',
+                                 drop_original: bool = False) -> pd.DataFrame:
+    """
+    Combines two or more categorical columns into a single new feature.
+
+    This can help models capture interaction effects between categorical variables.
+
+    Args:
+        df: Input DataFrame.
+        columns_to_combine: List of column names to combine.
+        new_col_name: Name for the newly created combined column.
+        separator: The string to use for joining the values. Default is '_'.
+        drop_original: If True, drops the original columns after combination.
+
+    Returns:
+        DataFrame with the new combined feature.
+    """
+    df = df.copy()
+
+    # Check if columns exist
+    for col in columns_to_combine:
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not in DataFrame.")
+
+    # Combine columns by converting them to string type and joining
+    df[new_col_name] = df[columns_to_combine].astype(str).agg(separator.join, axis=1)
+    print(f"Created new combined feature: '{new_col_name}'")
+
+    # Drop original columns if requested
+    if drop_original:
+        df = df.drop(columns=columns_to_combine)
+        print(f"Dropped original columns: {', '.join(columns_to_combine)}")
+
+    return df
