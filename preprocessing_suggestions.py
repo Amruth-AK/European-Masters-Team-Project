@@ -243,25 +243,18 @@ def suggest_outlier_handling(analysis_results: dict, target_column: str = None) 
         # Only suggest if outliers exist
         if outlier_count > 0:
             
-            # Rule 1: Small percentage of outliers (<5%) -> clip outliers
-            if outlier_percentage < 5.0:
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'Contains {outlier_count} outliers ({outlier_percentage:.1f}% of data)',
-                    'suggestion': 'Clip outliers to IQR boundaries to preserve all rows while limiting extreme values.',
-                    'function_to_call': 'clip_outliers_iqr',
-                    'kwargs': {'column': col, 'whisker_width': 1.5, 'analysis_results': analysis_results}
-                })
+            # --- MODIFIED LOGIC ---
+            # ALWAYS suggest clipping to avoid accidentally deleting too many rows in wide datasets.
+            # The original logic that suggested removal for high outlier percentages is too risky.
             
-            # Rule 2: Large percentage of outliers (>=5%) -> consider removal
-            else:
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'High proportion of outliers ({outlier_count} rows, {outlier_percentage:.1f}%)',
-                    'suggestion': 'Consider removing outlier rows if dataset is sufficiently large.',
-                    'function_to_call': 'remove_outliers_iqr',
-                    'kwargs': {'column': col, 'whisker_width': 1.5, 'analysis_results': analysis_results}
-                })
+            suggestions.append({
+                'feature': col,
+                'issue': f'Contains {outlier_count} outliers ({outlier_percentage:.2f}% of data)',
+                'suggestion': 'Clip outliers to the IQR boundaries. This contains extreme values without deleting rows, which is safer for datasets with many columns.',
+                'function_to_call': 'clip_outliers_iqr',  # Always use clip
+                'kwargs': {'column': col, 'whisker_width': 1.5, 'analysis_results': analysis_results}
+            })
+            
     
     return suggestions
 
