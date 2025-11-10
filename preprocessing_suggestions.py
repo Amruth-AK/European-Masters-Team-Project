@@ -1,3 +1,6 @@
+import numpy as np
+import pandas as pd
+
 def suggest_missing_value_handling(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate handling suggestions for missing values based on analysis results.
@@ -101,7 +104,10 @@ def suggest_duplicate_handling(analysis_results: dict) -> list:
     """
     suggestions = []
 
-    dup_info = analysis_results.get('duplicate_info', {})
+    dup_info = (
+        analysis_results.get('row_duplicate_info')
+        or analysis_results.get('duplicate_info', {})
+    )
     total_dup = dup_info.get('total_duplicates', 0)
     dup_pct = dup_info.get('duplicate_percentage', 0)
 
@@ -455,5 +461,175 @@ def suggest_datetime_features(analysis_results: dict, target_column: str = None)
     
     return suggestions    
 
+def suggest_correlation_based_features(analysis_results: dict) -> list:
+    """
+    Generate suggestions for creating new features from highly correlated feature pairs.
+    Adaptively adjusts threshold based on actual correlation distribution.
+    """
+    suggestions = []
+    
+    # Get correlation matrix from analysis results
+    correlations = analysis_results.get('correlations', {})
+    corr_matrix_dict = correlations.get('correlation_matrix', {})
+    
+    if not corr_matrix_dict:
+        return suggestions
+    
+    try:
+        corr_matrix = pd.DataFrame(corr_matrix_dict)
+    except Exception:
+        return suggestions
+    
+    # Get data types to identify numerical columns
+    data_types = analysis_results.get('general_info', {}).get('data_types', {})
+    numerical_cols = [col for col, dtype in data_types.items() 
+                     if 'int' in dtype or 'float' in dtype]
+    
+    # Exclude ID columns (they have abnormal correlation values)
+    id_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
+    numerical_cols = [col for col in numerical_cols 
+                     if not any(keyword in col.lower() for keyword in id_keywords)]
+    
+    if len(numerical_cols) < 2:
+        return suggestions
+    
+    # Collect all correlation values (excluding diagonal)
+    all_corrs = []
+    for i, col1 in enumerate(numerical_cols):
+        if col1 not in corr_matrix.index:
+            continue
+        for col2 in numerical_cols[i+1:]:
+            if col2 not in corr_matrix.columns:
+                continue
+            try:
+                corr_value = corr_matrix.loc[col1, col2]
+                if pd.notna(corr_value):
+                    # Filter out abnormal values (should be between -1 and 1)
+                    if -1 <= corr_value <= 1:
+                        all_corrs.append(abs(corr_value))
+            except (KeyError, IndexError):
+                continue
+    
+    if not all_corrs:
+        return suggestions
+    
+    # Analyze correlation distribution
+    max_corr = max(all_corrs)
+    median_corr = np.median(all_corrs)
+    
+    # Adaptive threshold selection based on actual data
+    if max_corr < 0.3:
+        # Very low correlations - use all pairs
+        correlation_threshold = 0.01
+        strategy = "all_pairs"
+        feature_types = ['product','ratio']
+    elif max_corr < 0.5:
+        # Low correlations - use very low threshold
+        correlation_threshold = 0.2
+        strategy = "low_correlation"
+        feature_types = ['product', 'ratio']
+    elif max_corr < 0.7:
+        # Moderate correlations - use moderate threshold
+        correlation_threshold = 0.4
+        strategy = "moderate_correlation"
+        feature_types = ['product', 'ratio', 'difference']
+    elif max_corr < 0.8:
+        # Good correlations - use standard threshold
+        correlation_threshold = 0.7
+        strategy = "standard"
+        feature_types = ['product', 'ratio', 'difference', 'sum']
+    else:
+        # High correlations - use high threshold
+        correlation_threshold = 0.8
+        strategy = "high_correlation"
+        feature_types = ['product', 'ratio', 'difference', 'sum']
+    
+    # Count pairs at selected threshold
+    high_corr_pairs = []
+    for i, col1 in enumerate(numerical_cols):
+        if col1 not in corr_matrix.index:
+            continue
+        for col2 in numerical_cols[i+1:]:
+            if col2 not in corr_matrix.columns:
+                continue
+            try:
+                corr_value = corr_matrix.loc[col1, col2]
+                if pd.notna(corr_value) and -1 <= corr_value <= 1:
+                    if correlation_threshold == 0.0 or abs(corr_value) > correlation_threshold:
+                        high_corr_pairs.append((col1, col2, corr_value))
+            except (KeyError, IndexError):
+                continue
+    
+    if len(high_corr_pairs) == 0:
+        return suggestions
+    
+    # Determine max features based on dataset size
+    shape = analysis_results.get('general_info', {}).get('shape', [0, 0])
+    n_samples, n_features = shape[0], shape[1]
+    
+    # Adaptive max_new_features based on dataset size and strategy
+    if strategy == "all_pairs":
+        if n_samples < 1000:
+            max_new_features = 10
+        elif n_samples < 10000:
+            max_new_features = 20
+        else:
+            max_new_features = 30
+    else:
+        if n_samples < 1000:
+            max_new_features = 50
+        elif n_samples < 10000:
+            max_new_features = 100
+        else:
+            max_new_features = 200
+    
+    # Create suggestion with adaptive message
+    if strategy == "all_pairs":
+        issue_msg = (
+            f"Very low correlations detected (max: {max_corr:.2f}, median: {median_corr:.2f}). "
+            f"Suggesting interaction features from all {len(high_corr_pairs)} feature pairs "
+            f"to explore non-linear relationships."
+        )
+        suggestion_msg = (
+            f"Even with low correlations, interaction features (A*B, A/B, etc.) can capture "
+            f"non-linear patterns that linear correlation misses. This will generate features "
+            f"from all {len(high_corr_pairs)} feature pairs."
+        )
+    elif strategy == "low_correlation":
+        issue_msg = (
+            f"Low correlations detected (max: {max_corr:.2f}, median: {median_corr:.2f}). "
+            f"Found {len(high_corr_pairs)} pairs with |corr| > {correlation_threshold}"
+        )
+        suggestion_msg = (
+            f"Create interaction features from {len(high_corr_pairs)} feature pairs "
+            f"with |correlation| > {correlation_threshold} to capture potential non-linear relationships."
+        )
+    else:
+        issue_msg = (
+            f"Found {len(high_corr_pairs)} pairs with |corr| > {correlation_threshold} "
+            f"(max correlation: {max_corr:.2f}, median: {median_corr:.2f})"
+        )
+        suggestion_msg = (
+            f"Create interaction features from {len(high_corr_pairs)} feature pairs "
+            f"with |correlation| > {correlation_threshold} to capture non-linear relationships."
+        )
+    
+    suggestions.append({
+        'feature': 'multiple',
+        'issue': issue_msg,
+        'suggestion': suggestion_msg,
+        'function_to_call': 'create_features_from_correlation_analysis',
+        'kwargs': {
+            'correlation_threshold': correlation_threshold,
+            'feature_types': feature_types,
+            'use_basic_filter': True,
+            'use_correlation_filter': True,
+            'min_cardinality': 5,
+            'max_new_features': max_new_features,
+            'corr_filter_threshold': 0.9,
+            'min_variance': 1e-4,
 
-
+        }
+    })
+    
+    return suggestions

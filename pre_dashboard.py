@@ -9,7 +9,8 @@ from preprocessing_suggestions import (
     suggest_numerical_scaling,
     suggest_categorical_encoding,
     suggest_identifier_removal,
-    suggest_datetime_features
+    suggest_datetime_features,
+    suggest_correlation_based_features
 )
 from preprocessing_function import (
     delete_missing_columns,
@@ -29,7 +30,8 @@ from preprocessing_function import (
     frequency_encode,
     remove_identifier_columns,
     calculate_datetime_diff,
-    extract_datetime_features
+    extract_datetime_features,
+    create_features_from_correlation_analysis
 )
 
 # Map string function names to actual functions
@@ -51,21 +53,28 @@ FUNC_MAP = {
     'frequency_encode': frequency_encode,
     'remove_identifier_columns' : remove_identifier_columns,
     'calculate_datetime_diff': calculate_datetime_diff,
-    'extract_datetime_features': extract_datetime_features
+    'extract_datetime_features': extract_datetime_features,
+    'create_features_from_correlation_analysis': create_features_from_correlation_analysis
 }
 
 
-def apply_suggestion(df, suggestion):
+def apply_suggestion(df, suggestion, analysis_results=None):
     """Apply a preprocessing function safely."""
     func_name = suggestion['function_to_call']
-    kwargs = suggestion.get('kwargs', {})
+    kwargs = suggestion.get('kwargs', {}).copy()
     func = FUNC_MAP.get(func_name)
+
+    # Inject analysis_results for correlation-based feature creation if not already present
+    if func_name == 'create_features_from_correlation_analysis' and analysis_results is not None:
+        kwargs.setdefault('analysis_results', analysis_results)
+
     if func:
         try:
             return func(df, **kwargs)
         except Exception as e:
             st.error(f"⚠️ Error applying {func_name} to {suggestion['feature']}: {e}")
     return df
+
 
 def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.DataFrame:
     """Streamlit preprocessing dashboard with Apply/Ignore All buttons."""
@@ -88,6 +97,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Numerical Scaling", suggest_numerical_scaling(analysis_results, target_column)),
         ("Categorical Encoding", suggest_categorical_encoding(analysis_results, target_column)),
         ("Datetime Feature Engineering", suggest_datetime_features(analysis_results, target_column)),
+        ("Correlation-based Features", suggest_correlation_based_features(analysis_results)),
         ("Identifier Removal", suggest_identifier_removal(analysis_results))
     ]
     valid_steps = [(name, sug) for name, sug in steps if sug]
@@ -114,7 +124,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         if apply_all:
             for _, suggestions in valid_steps:
                 for sug in suggestions:
-                    df = apply_suggestion(df, sug)
+                    df = apply_suggestion(df, sug, analysis_results=analysis_results)
             st.session_state.pre_df = df
             st.session_state.pre_status = "applied"
             st.rerun()  
