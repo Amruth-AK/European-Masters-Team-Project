@@ -5,7 +5,6 @@ import pandas as pd
 from analyze import DataAnalyzer
 from dashboard import create_dashboard
 from pre_dashboard import run_preprocessing_dashboard
-from model_suggestion import run_model_suggestions  
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -170,25 +169,28 @@ elif selected_page == "Preprocessing Suggestions":
         st.warning("⚠️ Please upload a dataset and run the analysis first.")
 
 elif selected_page == "Model Suggestions":
+    # This page is now a placeholder / info page.
+    # Model selection & hyperparameter tuning will be handled
+    # internally (e.g. via Optuna) in a separate backend step.
     if st.session_state.df is not None and st.session_state.target_column:
         if st.session_state.pre_status not in ["applied", "ignored"]:
-            st.warning("⚠️ Please finish preprocessing first by applying or ignoring the suggestions.")
+            st.warning(
+                "⚠️ Please finish preprocessing first by applying or ignoring the suggestions "
+                "on the Preprocessing page."
+            )
         else:
-            if "model_results" not in st.session_state or st.session_state.model_results is None:
-                st.info("💡 Comparing multiple models to find the best one...")
-                st.session_state.model_results = run_model_suggestions(
-                    st.session_state.df,
-                    st.session_state.target_column
-                )
-            else:
-                st.success("✅ Model training already completed. Showing previous results.")
-                model_results = st.session_state.model_results
-
-                if model_results and "leaderboard" in model_results:
-                    st.dataframe(model_results["leaderboard"])
-                    st.write(f"**Best model:** {model_results['best_model']}")
+            st.title("🤖 Model & Hyperparameter Suggestions")
+            st.info(
+                "The next step of the pipeline will:\n"
+                "- Use the internally selected best model as input to Optuna for hyperparameter tuning\n"
+                "- Use feature importance to remove irrelevant features\n\n"
+                "This page is currently a placeholder and does not run AutoGluon directly."
+            )
     else:
-        st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
+        st.warning(
+            "⚠️ Please upload a dataset and select a target column on the Home page first."
+        )
+
 
 else:
     if st.session_state.analysis_results:

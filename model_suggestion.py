@@ -1,159 +1,160 @@
 import pandas as pd
-import streamlit as st
 from autogluon.tabular import TabularPredictor
-import plotly.express as px
+from typing import Dict, Any, Optional
 
 
-def run_model_suggestions(df: pd.DataFrame, target_column: str, time_limit: int = None):
+def _detect_problem_type(df: pd.DataFrame, target_column: str):
     """
-    Trains AutoGluon models and suggests the best-performing one.
-    """
-    st.title("🤖 Model Suggestion (AutoGluon)")
-    st.write(f"Target column selected: **{target_column}**")
+    Detect problem type based on the target column and choose metrics:
 
-    # --- Validation ---
+    - Regression  → problem_type="regression",  eval_metric="root_mean_squared_error" (RMSE)
+    - Binary      → problem_type="binary",      eval_metric="roc_auc" (AUC)
+    - Multiclass  → problem_type="multiclass",  eval_metric="log_loss"
+    """
     if target_column not in df.columns:
-        st.error("❌ Target column not found in the dataset.")
-        return None
+        raise ValueError("Target column not found in the dataset.")
 
-    # --- Determine problem type ---
-    if pd.api.types.is_numeric_dtype(df[target_column]):
-        problem_type = 'regression'
-        eval_metric = 'r2'
+    target = df[target_column]
+    n_unique = target.nunique(dropna=True)
+
+    if n_unique <= 1:
+        raise ValueError("Target column must have at least 2 distinct values.")
+
+    is_numeric = pd.api.types.is_numeric_dtype(target)
+
+    # Numeric with > 2 unique values → regression (continuous)
+    if is_numeric and n_unique > 2:
+        return "regression", "root_mean_squared_error"
+
+    # Otherwise, treat as classification
+    if n_unique == 2:
+        return "binary", "roc_auc"
     else:
-        problem_type = 'classification'
-        eval_metric = 'accuracy'
+        return "multiclass", "log_loss"
 
-    st.write(f"Detected problem type: **{problem_type}**")
-    st.write(f"Using evaluation metric: **{eval_metric}**")
 
-    # --- Split data ---
-    train_data = df.sample(frac=0.8, random_state=42)
-    test_data = df.drop(train_data.index)
+def _infer_model_family(model_name: str) -> str:
+    """
+    Heuristic to map AutoGluon model names to a coarse model family,
+    which you can later use to decide what to tune with Optuna.
+    """
+    name = model_name.lower()
 
-    st.write(f"Training set: {train_data.shape} rows")
-    st.write(f"Test set: {test_data.shape} rows")
+    # Common AutoGluon model prefixes
+    if "lightgbm" in name:
+        return "lightgbm"
+    if "catboost" in name:
+        return "catboost"
+    if "xgboost" in name or "xgb" in name:
+        return "xgboost"
+    if "randomforest" in name or "rf_" in name:
+        return "random_forest"
+    if "extratrees" in name or "et_" in name:
+        return "extra_trees"
+    if "knn" in name:
+        return "knn"
+    if "nn_" in name or "neuralnet" in name:
+        return "neural_network"
+    if "linear" in name or "lr_" in name:
+        return "linear_model"
 
-    # --- Dynamic model selection ---
-    n_rows = df.shape[0]
-    if n_rows > 5000:
-        model_list = ['GBM', 'RF']
-    elif n_rows > 1000:
-        model_list = ['GBM', 'RF', 'XGB']
-    else:
-        model_list = ['GBM', 'RF', 'XGB', 'CAT', 'NN_TORCH']
+    return "unknown"
 
-    hyperparameters = {model: {} for model in model_list}
 
-    # --- Dynamic time limit ---
+def run_model_suggestions(
+    df: pd.DataFrame,
+    target_column: str,
+    time_limit: Optional[int] = None,
+    presets: str = "medium_quality_faster_train",
+) -> Dict[str, Any]:
+    """
+    Train models with AutoGluon and return artifacts that can be used
+    downstream (Optuna, feature selection, etc.), WITHOUT any Streamlit UI.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Input data (already preprocessed).
+    target_column : str
+        Target column name in `df`.
+    time_limit : int, optional
+        Global training time limit in seconds.
+    presets : str
+        AutoGluon presets.
+
+    Returns
+    -------
+    Dict[str, Any]
+        {
+            "problem_type": str,          # "regression" / "binary" / "multiclass"
+            "eval_metric": str,           # "root_mean_squared_error" / "roc_auc" / "log_loss"
+            "leaderboard": pd.DataFrame,  # full AutoGluon leaderboard
+            "best_model_name": str,       # AutoGluon internal model name (e.g. "LightGBM_BAG_L1")
+            "best_model_family": str,     # coarse family label for Optuna logic (e.g. "lightgbm")
+            "feature_importance": pd.DataFrame or None,  # importance values (may be None)
+            "predictor": TabularPredictor # fitted predictor object
+        }
+
+    Raises
+    ------
+    ValueError
+        If inputs are invalid (e.g., missing target column, too few target classes).
+    Exception
+        Any underlying AutoGluon error will propagate upward.
+    """
+    if target_column not in df.columns:
+        raise ValueError("Target column not found in the dataset.")
+
+    if df.empty:
+        raise ValueError("The input dataset is empty.")
+
+    # Work on a copy so we don't mutate the original dataframe
+    df = df.copy()
+
+    # Drop rows where target is missing (AutoGluon cannot train with NaN labels)
+    df = df.dropna(subset=[target_column])
+    if df.empty:
+        raise ValueError("All rows have missing values in the target column.")
+
+    # Detect problem type and metric
+    problem_type, eval_metric = _detect_problem_type(df, target_column)
+
+    # Default training time_limit if not provided
     if time_limit is None:
-        time_limit = 60
+        time_limit = 60  # seconds, adjust if you want
 
-    st.info(f"Training models: {model_list} for up to {time_limit} seconds total...")
+    # Train AutoGluon predictor
+    predictor = TabularPredictor(
+        label=target_column,
+        problem_type=problem_type,
+        eval_metric=eval_metric,
+    ).fit(
+        train_data=df,
+        time_limit=time_limit,
+        presets=presets,
+    )
 
-    # --- Train models ---
+    # Get leaderboard
+    leaderboard = predictor.leaderboard(silent=True)
+    if leaderboard is None or leaderboard.empty:
+        raise RuntimeError("No models were trained successfully; leaderboard is empty.")
+
+    # Best model is first row in leaderboard
+    best_model_name = str(leaderboard.iloc[0]["model"])
+    best_model_family = _infer_model_family(best_model_name)
+
+    # Compute feature importance for downstream feature selection
     try:
-        predictor = TabularPredictor(
-            label=target_column,
-            problem_type=problem_type,
-            eval_metric=eval_metric,
-            verbosity=1
-        ).fit(
-            train_data=train_data,
-            time_limit=time_limit,
-            presets='medium_quality_faster_train',
-            hyperparameters=hyperparameters
-        )
-
-    except Exception as e:
-        st.error(f"❌ Model training failed: {e}")
-        return None
-
-    # --- Evaluate leaderboard ---
-    leaderboard = None
-    try:
-        leaderboard = predictor.leaderboard(test_data, silent=True)
-
-        if leaderboard is not None and not leaderboard.empty:
-            # Select column for sorting
-            score_column = 'score_test' if 'score_test' in leaderboard.columns else 'score_val'
-
-            # Determine if higher values are better
-            higher_is_better_metrics = ['r2', 'accuracy', 'roc_auc', 'f1']
-            ascending_order = False if eval_metric in higher_is_better_metrics else True
-
-            # Sort leaderboard
-            leaderboard = leaderboard.sort_values(by=score_column, ascending=ascending_order).reset_index(drop=True)
-
-            st.subheader("🏆 Model Leaderboard (Sorted by Performance)")
-            st.dataframe(leaderboard)
-
-            # Display model ranking
-            st.write("### 📋 Model Performance Ranking:")
-            for i, row in leaderboard.iterrows():
-                model_name = row['model']
-                score = row.get(score_column, None)
-                if score is not None and not pd.isna(score):
-                    st.write(f"{i + 1}. **{model_name}** - {score_column}: {score:.4f}")
-                else:
-                    st.write(f"{i + 1}. **{model_name}** - {score_column}: N/A")
-        else:
-            st.warning("⚠️ Leaderboard is empty or None")
-
-    except Exception as e:
-        st.warning(f"Leaderboard not available: {e}")
-
-    # --- Determine best model ---
-    best_model = None
-    try:
-        if leaderboard is not None and not leaderboard.empty:
-            # Top-ranked model from sorted leaderboard
-            best_model = leaderboard.iloc[0]['model']
-            st.success(f"✅ Best model: **{best_model}**")
-
-            best_score = leaderboard.iloc[0].get(score_column, None)
-            if best_score is not None and not pd.isna(best_score):
-                st.write(f"**Performance**: {score_column} = {best_score:.4f}")
-        else:
-            # Fallback: AutoGluon's built-in best model
-            best_model = predictor.get_model_best()
-            st.success(f"✅ Best model (fallback): **{best_model}**")
-    except Exception as e:
-        st.warning(f"Could not determine best model: {e}")
-
-    # --- Feature importance ---
-    if best_model is not None:
-        st.markdown("### 🔍 Feature Importance (Top 10)")
-        try:
-            importance_df = predictor.feature_importance(test_data, model=best_model)
-            if importance_df is not None and not importance_df.empty:
-                st.dataframe(importance_df.head(10))
-        except Exception as e:
-            st.warning(f"Feature importance not available: {e}")
-
-    # --- Performance comparison chart ---
-    if leaderboard is not None and not leaderboard.empty:
-        st.markdown("### 📊 Performance Comparison")
-        if score_column in leaderboard.columns:
-            chart_data = leaderboard[['model', score_column]].copy()
-            chart_data = chart_data.sort_values(
-                by=score_column,
-                ascending=(eval_metric not in higher_is_better_metrics)
-            )
-            fig = px.bar(
-                chart_data,
-                x='model',
-                y=score_column,
-                title=f"Model Performance ({score_column})",
-                color=score_column,
-                color_continuous_scale='viridis'
-            )
-            fig.update_layout(xaxis_title="Model", yaxis_title=score_column)
-            st.plotly_chart(fig, use_container_width=True)
+        fi_df = predictor.feature_importance(data=df)
+    except Exception:
+        fi_df = None
 
     return {
+        "problem_type": problem_type,
+        "eval_metric": eval_metric,
         "leaderboard": leaderboard,
-        "best_model": best_model,
+        "best_model_name": best_model_name,
+        "best_model_family": best_model_family,
+        "feature_importance": fi_df,
         "predictor": predictor,
-        "problem_type": problem_type
     }
