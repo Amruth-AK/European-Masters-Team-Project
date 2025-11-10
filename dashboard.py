@@ -3,7 +3,6 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 
-
 def create_dashboard(analysis_dict: dict, page: str):
     """
     Renders the specific analysis page requested by the user.
@@ -49,58 +48,68 @@ def create_dashboard(analysis_dict: dict, page: str):
     elif page == 'Descriptive Statistics':
         st.subheader("Descriptive Statistics for Numerical Columns")
         stats_dict = analysis_dict['descriptive_statistics']
-        numerical_cols = list(stats_dict.keys())
-        fig = go.Figure()
-        for col in numerical_cols:
-            stats = stats_dict[col]
-            fig.add_trace(go.Box(
-                x=[col], name=col, q1=[stats['25%']], median=[stats['50%']],
-                q3=[stats['75%']], lowerfence=[stats['min']], upperfence=[stats['max']]
-            ))
-        fig.update_layout(title_text="Box Plots of Numerical Columns (from Summary Stats)")
-        st.plotly_chart(fig, use_container_width=True)
-        desc_stats_df = pd.DataFrame(stats_dict)
-        st.dataframe(desc_stats_df)
+        if not stats_dict:
+            st.info("No numerical columns available for statistics after excluding ID columns.")
+        else:
+            numerical_cols = list(stats_dict.keys())
+            fig = go.Figure()
+            for col in numerical_cols:
+                stats = stats_dict[col]
+                fig.add_trace(go.Box(
+                    x=[col], name=col, q1=[stats['25%']], median=[stats['50%']],
+                    q3=[stats['75%']], lowerfence=[stats['min']], upperfence=[stats['max']]
+                ))
+            fig.update_layout(title_text="Box Plots of Numerical Columns (from Summary Stats)")
+            st.plotly_chart(fig, use_container_width=True)
+            desc_stats_df = pd.DataFrame(stats_dict)
+            st.dataframe(desc_stats_df)
 
     elif page == 'Distributions':
         st.subheader("Distribution Analysis for Numerical Columns")
         numerical_cols = list(analysis_dict['distributions'].keys())
-        selected_col_hist = st.selectbox("Select a column to view its distribution", numerical_cols)
-        if selected_col_hist:
-            hist_data = analysis_dict['histogram_data'][selected_col_hist]
-            fig = go.Figure(data=[go.Bar(
-                y=hist_data['counts'], x=hist_data['bin_edges'][:-1],
-                width=[hist_data['bin_edges'][i + 1] - hist_data['bin_edges'][i] for i in range(len(hist_data['counts']))]
-            )])
-            fig.update_layout(title_text=f'Distribution of {selected_col_hist} (Reconstructed)',
-                              xaxis_title=selected_col_hist, yaxis_title='Count')
-            st.plotly_chart(fig, use_container_width=True)
-        st.subheader("Skewness")
-        dist_df = pd.DataFrame.from_dict(analysis_dict['distributions'], orient='index').reset_index()
-        dist_df.columns = ['Column', 'Skewness']
-        fig_skew = px.bar(
-            dist_df, x='Column', y='Skewness', title='Skewness of Numerical Columns',
-            color='Skewness', color_continuous_scale=px.colors.diverging.RdYlGn_r, color_continuous_midpoint=0
-        )
-        st.plotly_chart(fig_skew, use_container_width=True)
-        st.info("Skewness indicates the asymmetry of the data distribution. A value of 0 suggests a symmetrical distribution.")
+        if not numerical_cols:
+            st.info("No numerical columns available for distribution analysis.")
+        else:
+            selected_col_hist = st.selectbox("Select a column to view its distribution", numerical_cols)
+            if selected_col_hist:
+                hist_data = analysis_dict['histogram_data'][selected_col_hist]
+                fig = go.Figure(data=[go.Bar(
+                    y=hist_data['counts'], x=hist_data['bin_edges'][:-1],
+                    width=[hist_data['bin_edges'][i + 1] - hist_data['bin_edges'][i] for i in range(len(hist_data['counts']))]
+                )])
+                fig.update_layout(title_text=f'Distribution of {selected_col_hist} (Reconstructed)',
+                                  xaxis_title=selected_col_hist, yaxis_title='Count')
+                st.plotly_chart(fig, use_container_width=True)
+            st.subheader("Skewness")
+            dist_df = pd.DataFrame.from_dict(analysis_dict['distributions'], orient='index').reset_index()
+            dist_df.columns = ['Column', 'Skewness']
+            fig_skew = px.bar(
+                dist_df, x='Column', y='Skewness', title='Skewness of Numerical Columns',
+                color='Skewness', color_continuous_scale=px.colors.diverging.RdYlGn_r, color_continuous_midpoint=0
+            )
+            st.plotly_chart(fig_skew, use_container_width=True)
+            st.info("Skewness indicates the asymmetry of the data distribution. A value of 0 suggests a symmetrical distribution.")
 
     elif page == 'Correlations':
         st.subheader("Correlation Analysis")
-        st.markdown("#### Correlation Heatmap")
-        corr_matrix = pd.DataFrame(analysis_dict['correlations']['correlation_matrix'])
-        fig = px.imshow(corr_matrix, text_auto=True, aspect="auto", title="Correlation Matrix", color_continuous_scale='RdBu_r')
-        st.plotly_chart(fig, use_container_width=True)
-        st.markdown("#### Correlation with Target Column")
-        target_corr = analysis_dict['correlations']['target_correlation']
-        if isinstance(target_corr, dict):
-            target_corr_df = pd.DataFrame.from_dict(target_corr, orient='index', columns=['Correlation']).reset_index()
-            target_corr_df.columns = ['Feature', 'Correlation']
-            fig2 = px.bar(target_corr_df.sort_values('Correlation', ascending=False), x='Feature', y='Correlation',
-                          title='Feature Correlation with Target', color='Correlation', color_continuous_scale='RdBu_r')
-            st.plotly_chart(fig2, use_container_width=True)
+        if not analysis_dict['correlations']:
+            st.info("No numerical data available for correlation analysis.")
         else:
-            st.info("Target column is not numeric, so target correlation is not available.")
+            st.markdown("#### Correlation Heatmap")
+            corr_matrix = pd.DataFrame(analysis_dict['correlations']['correlation_matrix'])
+            fig = px.imshow(corr_matrix, text_auto=True, aspect="auto", title="Correlation Matrix", color_continuous_scale='RdBu_r')
+            st.plotly_chart(fig, use_container_width=True)
+            
+            st.markdown("#### Correlation with Target Column")
+            target_corr = analysis_dict['correlations']['target_correlation']
+            if isinstance(target_corr, dict):
+                target_corr_df = pd.DataFrame.from_dict(target_corr, orient='index', columns=['Correlation']).reset_index()
+                target_corr_df.columns = ['Feature', 'Correlation']
+                fig2 = px.bar(target_corr_df.sort_values('Correlation', ascending=False), x='Feature', y='Correlation',
+                              title='Feature Correlation with Target', color='Correlation', color_continuous_scale='RdBu_r')
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("Target column is not numeric, so target correlation is not available.")
 
     elif page == 'Categorical Info':
         st.subheader("Categorical Column Analysis")
@@ -123,18 +132,21 @@ def create_dashboard(analysis_dict: dict, page: str):
     elif page == 'Outlier Info':
         st.subheader("Outlier Analysis (IQR Method)")
         outlier_df = pd.DataFrame.from_dict(analysis_dict['outlier_info'], orient='index').reset_index()
-        outlier_df.columns = ['Column', 'Lower Bound', 'Upper Bound', 'Total Outlier Count', 'Total Outlier %',
-                              'Lower Outlier Count', 'Lower Outlier %', 'Upper Outlier Count', 'Upper Outlier %']
-        plot_df = outlier_df[['Column', 'Lower Outlier %', 'Upper Outlier %']].melt(
-            id_vars='Column', var_name='Outlier Type', value_name='Percentage'
-        )
-        fig = px.bar(
-            plot_df, x='Column', y='Percentage', color='Outlier Type', title='Percentage and Type of Outliers',
-            color_discrete_map={'Lower Outlier %': 'blue', 'Upper Outlier %': 'red'}
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(outlier_df)
-        st.info("Outliers are detected using the 1.5 * IQR rule.")
+        if outlier_df.empty:
+            st.info("No numerical columns were analyzed for outliers.")
+        else:
+            outlier_df.columns = ['Column', 'Lower Bound', 'Upper Bound', 'Total Outlier Count', 'Total Outlier %',
+                                'Lower Outlier Count', 'Lower Outlier %', 'Upper Outlier Count', 'Upper Outlier %']
+            plot_df = outlier_df[['Column', 'Lower Outlier %', 'Upper Outlier %']].melt(
+                id_vars='Column', var_name='Outlier Type', value_name='Percentage'
+            )
+            fig = px.bar(
+                plot_df, x='Column', y='Percentage', color='Outlier Type', title='Percentage and Type of Outliers',
+                color_discrete_map={'Lower Outlier %': 'blue', 'Upper Outlier %': 'red'}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+            st.dataframe(outlier_df)
+            st.info("Outliers are detected using the 1.5 * IQR rule.")
 
     elif page == 'Duplicate Analysis':
         st.subheader("Duplicate Row Analysis")
@@ -142,13 +154,12 @@ def create_dashboard(analysis_dict: dict, page: str):
         
         ignored_cols = row_info.get('ignored_columns')
         if ignored_cols:
-            st.info(f"The following identifier columns were excluded from this analysis: `{'`, `'.join(ignored_cols)}`")
+            st.info(f"The following identifier columns were automatically detected and excluded from this analysis: `{'`, `'.join(ignored_cols)}`")
         
         col1, col2 = st.columns(2)
         col1.metric("Total Duplicate Rows", row_info.get('total_duplicates', 0))
         col2.metric("Duplicate Row Percentage", f"{row_info.get('duplicate_percentage', 0):.2f}%")
         
-        # Display sample of duplicate rows if they exist
         if row_info.get('total_duplicates', 0) > 0:
             st.write("Sample of duplicate rows found:")
             st.dataframe(pd.DataFrame(row_info['duplicate_rows']).head())
@@ -162,5 +173,3 @@ def create_dashboard(analysis_dict: dict, page: str):
         )
         st.plotly_chart(fig, use_container_width=True)
         st.dataframe(feature_dup_df)
-
-
