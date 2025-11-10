@@ -1,3 +1,5 @@
+#pre_dashboard.py
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -9,7 +11,8 @@ from preprocessing_suggestions import (
     suggest_numerical_scaling,
     suggest_categorical_encoding,
     suggest_identifier_removal,
-    suggest_datetime_features
+    suggest_datetime_features,
+    suggest_feature_combination
 )
 from preprocessing_function import (
     delete_missing_columns,
@@ -29,7 +32,8 @@ from preprocessing_function import (
     frequency_encode,
     remove_identifier_columns,
     calculate_datetime_diff,
-    extract_datetime_features
+    extract_datetime_features,
+    combine_categorical_features
 )
 
 # Map string function names to actual functions
@@ -51,7 +55,8 @@ FUNC_MAP = {
     'frequency_encode': frequency_encode,
     'remove_identifier_columns' : remove_identifier_columns,
     'calculate_datetime_diff': calculate_datetime_diff,
-    'extract_datetime_features': extract_datetime_features
+    'extract_datetime_features': extract_datetime_features,
+    'combine_categorical_features': combine_categorical_features
 }
 
 
@@ -86,6 +91,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Duplicate Rows", suggest_duplicate_handling(analysis_results)),
         ("Outliers", suggest_outlier_handling(analysis_results, target_column)),
         ("Numerical Scaling", suggest_numerical_scaling(analysis_results, target_column)),
+        ("Feature Combination", suggest_feature_combination(analysis_results)),
         ("Categorical Encoding", suggest_categorical_encoding(analysis_results, target_column)),
         ("Datetime Feature Engineering", suggest_datetime_features(analysis_results, target_column)),
         ("Identifier Removal", suggest_identifier_removal(analysis_results))
