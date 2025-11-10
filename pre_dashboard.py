@@ -88,7 +88,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Numerical Scaling", suggest_numerical_scaling(analysis_results, target_column)),
         ("Categorical Encoding", suggest_categorical_encoding(analysis_results, target_column)),
         ("Datetime Feature Engineering", suggest_datetime_features(analysis_results, target_column)),
-        ("Identifier Removal", suggest_identifier_removal(analysis_results, target_column))
+        ("Identifier Removal", suggest_identifier_removal(analysis_results))
     ]
     valid_steps = [(name, sug) for name, sug in steps if sug]
 

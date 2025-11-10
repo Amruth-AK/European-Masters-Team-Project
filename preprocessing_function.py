@@ -597,48 +597,17 @@ def frequency_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.Dat
 # Identifier Column Removal - Zhiqi
 # ============================================================================
 
-def remove_identifier_columns(df: pd.DataFrame, 
-                             pattern: str = 'id',
-                             max_unique_ratio: float = 0.95) -> pd.DataFrame:
+def remove_identifier_columns(df, id_columns=None, **kwargs):
     """
-    Automatically remove identifier/id-like columns (e.g., id, index, uid).
-    
-    Detection Logic:
-    1. Column name contains 'id' (or specified pattern)
-    2. OR unique values > 95% of total rows (high cardinality)
-    
-    Args:
-        df: Input DataFrame
-        pattern: Keyword to search in column names (case-insensitive)
-        max_unique_ratio: Threshold for unique value ratio (0.95 = 95%)
-    
-    Returns:
-        DataFrame with identifier columns removed
-    
-    Example:
-        >>> df = remove_identifier_columns(df)
-        >>> df = remove_identifier_columns(df, pattern='key', max_unique_ratio=0.99)
+    Remove identifier columns detected by DataAnalyzer.
     """
-    df = df.copy()
-    to_remove = []
-    identifier_keywords = ['id', 'index', 'uid', 'key', 'identifier', 'pk']
-    
-    for col in df.columns:
-        
-        if any(kw == col.lower() or col.lower().endswith(f"_{kw}") for kw in identifier_keywords):
-            to_remove.append(col)
-            continue
+    if not id_columns:
+        return df
 
-        
-        # Check 2: High unique ratio
-        unique_ratio = df[col].nunique() / len(df)
-        if unique_ratio > max_unique_ratio:
-            to_remove.append(col)
-    
-    if to_remove:
-        df = df.drop(columns=to_remove)
-        print(f"Removed identifier columns: {to_remove}")
-    
+    cols_to_drop = [col for col in id_columns if col in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+
     return df
 
 
