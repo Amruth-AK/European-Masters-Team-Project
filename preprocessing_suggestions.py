@@ -474,6 +474,9 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
     except Exception:
         return suggestions
     
+    if target_column is not None:
+        corr_matrix = corr_matrix.drop(index=target_column, columns=target_column, errors='ignore')
+    
     # Get data types to identify numerical columns
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
     numerical_cols = [
@@ -625,7 +628,7 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
             'max_new_features': max_new_features,
             'corr_filter_threshold': 0.9,
             'min_variance': 1e-4,
-
+            'target_column': target_column
         }
     })
     
