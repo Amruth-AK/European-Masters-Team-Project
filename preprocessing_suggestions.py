@@ -455,7 +455,7 @@ def suggest_datetime_features(analysis_results: dict, target_column: str = None)
     
     return suggestions    
 
-def suggest_correlation_based_features(analysis_results: dict) -> list:
+def suggest_correlation_based_features(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate suggestions for creating new features from highly correlated feature pairs.
     Adaptively adjusts threshold based on actual correlation distribution.
@@ -476,8 +476,11 @@ def suggest_correlation_based_features(analysis_results: dict) -> list:
     
     # Get data types to identify numerical columns
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
-    numerical_cols = [col for col, dtype in data_types.items() 
-                     if 'int' in dtype or 'float' in dtype]
+    numerical_cols = [
+        col for col, dtype in data_types.items()
+        if ('int' in dtype or 'float' in dtype) and col != target_column
+    ]
+
     
     # Exclude ID columns (they have abnormal correlation values)
     id_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
