@@ -324,7 +324,7 @@ def suggest_categorical_encoding(analysis_results: dict) -> list:
     
     return suggestions
 
-def suggest_identifier_removal(analysis_results: Dict[str, Any]) -> List[Dict[str, Any]]:
+def suggest_identifier_removal(analysis_results: dict) -> list:
     """
     Generate suggestions to remove identifier columns based on a scoring system.
 
@@ -333,79 +333,76 @@ def suggest_identifier_removal(analysis_results: Dict[str, Any]) -> List[Dict[st
     data type, and name (minus a null penalty) exceeds a set threshold.
 
     Args:
-        analysis_results: A dictionary containing pre-computed DataFrame analytics,
-                          expected to be from a tool like DataAnalyzer.
+        analysis_results: Dictionary from a data analysis process, expected
+                          to contain keys like 'general_info', 'column_statistics',
+                          and 'missing_values_info'.
 
     Returns:
-        list: A list containing a single suggestion dictionary if any identifier
-              columns are found.
+        list: A list of preprocessing suggestions for identifier removal.
     """
     suggestions = []
-
-    # --- Extract necessary info from analysis_results ---
+    
+    # --- 1. Extract necessary information from analysis_results ---
     general_info = analysis_results.get('general_info', {})
-    data_types = general_info.get('data_types', {})
     total_rows = general_info.get('shape', [0])[0]
-
-    # Return early if there's no data to analyze
-    if total_rows == 0 or not data_types:
+    data_types = general_info.get('data_types', {})
+    
+    if total_rows == 0:
         return []
 
-    feature_dup_info = analysis_results.get('feature_duplicate_info', {})
-    # Assumes null_info is available in the analysis results.
-    null_info = analysis_results.get('null_info', {})
-
+    # --- 2. Define heuristics and keywords ---
+    identifier_keywords = ['id', 'key', 'identifier', 'uuid', 'pk']
     identifier_cols = []
-
+    
+    # --- 3. Loop through each column and calculate its score ---
     for col, dtype in data_types.items():
-        # --- Calculate scores for each heuristic ---
+        # Heuristic 1: Uniqueness Score
+        # Assumes 'column_statistics' holds unique value counts
+        col_stats = analysis_results.get('column_statistics', {}).get(col, {})
+        unique_count = col_stats.get('unique_values', 0)
+        uniqueness_score = unique_count / total_rows if total_rows > 0 else 0
 
-        # Heuristic 1: Uniqueness
-        unique_count = total_rows
-        col_dup_info = feature_dup_info.get(col, {})
-        if col_dup_info:
-            duplicate_count = col_dup_info.get('duplicate_count', 0)
-            unique_count = total_rows - duplicate_count
-        uniqueness_score = unique_count / total_rows
-
-        # Heuristic 2: Data Type
+        # Heuristic 2: Data Type Score
+        # We check the string representation of the data type
+        dtype_str = str(dtype).lower()
         dtype_score = 0
-        if pd.api.types.is_integer_dtype(dtype):
+        if 'int' in dtype_str:
             dtype_score = 0.2
-        elif pd.api.types.is_string_dtype(dtype):
+        elif 'object' in dtype_str or 'string' in dtype_str:
             dtype_score = 0.1
 
-        # Heuristic 3: Column Name
+        # Heuristic 3: Column Name Score
         name_score = 0
-        if any(keyword in col.lower() for keyword in ['id', 'key', 'identifier', 'uuid', 'pk', 'uid', 'index']):
+        if any(keyword in col.lower() for keyword in identifier_keywords):
             name_score = 0.3
 
-        # Heuristic 4: Low Nulls (penalize for nulls)
-        col_null_info = null_info.get(col, {})
-        null_count = col_null_info.get('null_count', 0)
-        null_penalty = null_count / total_rows
+        # Heuristic 4: Null Penalty
+        # Assumes 'missing_values_info' holds null counts
+        missing_info = analysis_results.get('missing_values_info', {}).get(col, {})
+        null_count = missing_info.get('missing_count', 0)
+        null_penalty = null_count / total_rows if total_rows > 0 else 0
 
         # Combine scores
         total_score = uniqueness_score + dtype_score + name_score - null_penalty
 
-        # A threshold is used to identify suitable ID columns
+        # If score exceeds the threshold, mark for suggestion
         if total_score > 0.8:  # This threshold can be adjusted
             identifier_cols.append(col)
-
-    # --- Generate a single suggestion if any identifiers were found ---
+    
+    # --- 4. Format the output suggestion ---
+    # Create a single suggestion if any identifier columns were found,
+    # as the removal function handles them in a batch.
     if identifier_cols:
-        # Format for readability
-        feature_str = ', '.join(f"'{col}'" for col in identifier_cols)
-        
         suggestions.append({
-            'feature': feature_str,
-            'issue': f'Potential identifier column(s) detected: {feature_str}',
+            'feature': ', '.join(identifier_cols),
+            'issue': f'Potential identifier column(s) detected: {", ".join(identifier_cols)}',
             'suggestion': 'Remove identifier columns as they typically have no predictive value and can negatively impact model performance.',
             'function_to_call': 'remove_identifier_columns',
-            'kwargs': {}  # kwargs are no longer needed as the new function is parameter-free
+            'kwargs': {}  # The new function is self-contained and doesn't need kwargs
         })
-
+    
     return suggestions
+
 
 def suggest_datetime_features(analysis_results: dict) -> list:
     """
