@@ -1,3 +1,5 @@
+# pre_dashboard.py
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -98,10 +100,10 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Duplicate Rows", suggest_duplicate_handling(analysis_results)),
         ("Outliers", suggest_outlier_handling(analysis_results, target_column)),
         ("Numerical Scaling", suggest_numerical_scaling(analysis_results, target_column)),
+        ("Correlation-based Features", suggest_correlation_based_features(analysis_results)),
         ("Feature Combination", suggest_feature_combination(analysis_results, target_column)),
         ("Categorical Encoding", suggest_categorical_encoding(analysis_results, target_column)),
-        ("Datetime Feature Engineering", suggest_datetime_features(analysis_results, target_column)),
-        ("Correlation-based Features", suggest_correlation_based_features(analysis_results)),
+        ("Datetime Feature Engineering", suggest_datetime_features(analysis_results, target_column)),   
         ("Identifier Removal", suggest_identifier_removal(analysis_results))
     ]
     valid_steps = [(name, sug) for name, sug in steps if sug]
