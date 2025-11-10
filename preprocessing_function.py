@@ -812,3 +812,272 @@ def calculate_datetime_diff(df: pd.DataFrame,
     print(f"Created time difference column '{new_col_name}' ({unit})")
     
     return df
+
+
+
+# ============================================================================
+# Feature Engineering - Create Features from High Correlation Pairs - Zhiqi
+# ============================================================================
+
+def create_features_from_high_correlation(
+    df: pd.DataFrame, 
+    correlation_threshold: float = 0.3,
+    target_column: str = None,
+    exclude_columns: List[str] = None,
+    feature_types: List[str] = ['product', 'ratio'],
+    analysis_results: Dict = None, 
+    # Filtering parameters
+    use_basic_filter: bool = True,
+    use_correlation_filter: bool = True,
+    min_cardinality: int = 3,
+    max_new_features: int = 500,
+    corr_filter_threshold: float = 0.95,
+    min_variance: float = 1e-6  
+) -> pd.DataFrame:
+    """
+    Create new features from highly correlated pairs with multi-layer filtering.
+    
+    Uses the same correlation calculation method as analyze.py.
+    
+    Args:
+        df: Input DataFrame
+        correlation_threshold: Min correlation for feature pairs (default: 0.3)
+        target_column: Optional target column
+        exclude_columns: Columns to exclude
+        feature_types: ['product', 'ratio', 'difference', 'sum', 'interaction']
+        analysis_results: Optional (kept for compatibility, but not used)
+        use_basic_filter: Remove constant/low-cardinality/low-variance features
+        use_correlation_filter: Remove redundant features (corr > threshold)
+        min_cardinality: Min unique values (default: 3)
+        max_new_features: Max features to create (default: 500)
+        corr_filter_threshold: Threshold for redundancy filtering (default: 0.95)
+        min_variance: Minimum variance threshold for filtering (default: 1e-6)
+    
+    Returns:
+        DataFrame with new features
+    """
+    df = df.copy()
+    
+    # 1. Prepare numerical columns (same as analyze.py line 54)
+    numerical_cols = df.select_dtypes(include=np.number).columns.tolist()
+    if exclude_columns:
+        numerical_cols = [col for col in numerical_cols if col not in exclude_columns]
+    if target_column and target_column in numerical_cols:
+        numerical_cols.remove(target_column)
+    
+    if len(numerical_cols) < 2:
+        print("⚠️ Need at least 2 numerical columns")
+        return df
+    
+    # 2. Get correlation matrix (same logic as analyze.py line 59)
+    corr_matrix = df[numerical_cols].corr()
+    
+    # 3. Find high correlation pairs
+    high_corr_pairs = _find_high_corr_pairs(
+        corr_matrix, numerical_cols, target_column, correlation_threshold
+    )
+    
+    if not high_corr_pairs:
+        print(f"❌ No pairs found with |corr| > {correlation_threshold}")
+        return df
+    
+    print(f"✓ Found {len(high_corr_pairs)} high correlation pairs")
+    
+    # 4. Generate candidate features
+    candidate_df = _generate_candidate_features(df, high_corr_pairs, feature_types)
+    
+    if candidate_df.empty:
+        print("❌ No candidate features generated")
+        return df
+    
+    print(f"✓ Generated {len(candidate_df.columns)} candidate features")
+    
+    # 5. Apply filters
+    if use_basic_filter:
+        candidate_df = _apply_basic_filter(candidate_df, min_cardinality, min_variance)
+    
+    if use_correlation_filter and len(candidate_df.columns) > 1:
+        candidate_df = _apply_correlation_filter(candidate_df, corr_filter_threshold)
+    
+    # 6. Limit features
+    if len(candidate_df.columns) > max_new_features:
+        print(f"⚠️ Limiting to {max_new_features} features")
+        candidate_df = candidate_df.sample(n=max_new_features, random_state=42, axis=1)
+    
+    # 7. Add to DataFrame
+    for col in candidate_df.columns:
+        df[col] = candidate_df[col]
+    
+    print(f"✅ Added {len(candidate_df.columns)} new features")
+    return df
+
+
+# Helper functions
+def _get_correlation_matrix(df, numerical_cols, analysis_results):
+    """Get correlation matrix using the same logic as analyze.py."""
+    # Same calculation as analyze.py line 59: self.df[numerical_cols].corr()
+    return df[numerical_cols].corr()
+
+
+def _find_high_corr_pairs(corr_matrix, numerical_cols, target_column, threshold):
+    """Find pairs with high correlation."""
+    pairs = []
+    
+    # Handle threshold = 0.0 (include all pairs)
+    if threshold == 0.0:
+        for i, col1 in enumerate(numerical_cols):
+            if col1 not in corr_matrix.index:
+                continue
+            for col2 in numerical_cols[i+1:]:
+                if col2 not in corr_matrix.columns:
+                    continue
+                try:
+                    corr_value = corr_matrix.loc[col1, col2]
+                    if pd.notna(corr_value):
+                        pairs.append((col1, col2, corr_value))
+                except (KeyError, IndexError):
+                    continue
+        return pairs
+    
+    # Normal case: threshold > 0
+    # Prioritize target correlations
+    if target_column and target_column in corr_matrix.index:
+        target_corrs = corr_matrix[target_column].abs()
+        high_corr_cols = target_corrs[target_corrs > threshold].index.tolist()
+        if target_column in high_corr_cols:
+            high_corr_cols.remove(target_column)
+        
+        for col in high_corr_cols:
+            if col in numerical_cols:
+                pairs.append((target_column, col, corr_matrix.loc[target_column, col]))
+    
+    # Find all high correlation pairs
+    for i, col1 in enumerate(numerical_cols):
+        for col2 in numerical_cols[i+1:]:
+            try:
+                corr_value = corr_matrix.loc[col1, col2]
+                if pd.notna(corr_value) and abs(corr_value) > threshold:
+                    if not any((c1, c2) in [(col1, col2), (col2, col1)] for c1, c2, _ in pairs):
+                        pairs.append((col1, col2, corr_value))
+            except (KeyError, IndexError):
+                continue
+    
+    return pairs
+
+def _generate_candidate_features(df, high_corr_pairs, feature_types):
+    """Generate candidate features from pairs."""
+    candidates = {}
+    
+    for col1, col2, _ in high_corr_pairs:
+        # Skip if too many missing values
+        if df[col1].isnull().mean() > 0.5 or df[col2].isnull().mean() > 0.5:
+            continue
+        
+        if 'product' in feature_types:
+            candidates[f'{col1}_x_{col2}'] = df[col1] * df[col2]
+        
+        if 'ratio' in feature_types:
+            candidates[f'{col1}_div_{col2}'] = np.where(
+                df[col2] != 0, df[col1] / df[col2], np.nan
+            )
+        
+        if 'difference' in feature_types:
+            candidates[f'{col1}_minus_{col2}'] = df[col1] - df[col2]
+        
+        if 'sum' in feature_types:
+            candidates[f'{col1}_plus_{col2}'] = df[col1] + df[col2]
+        
+        if 'interaction' in feature_types:
+            candidates[f'{col1}_interact_{col2}'] = (
+                (df[col1] - df[col1].mean()) * (df[col2] - df[col2].mean())
+            )
+    
+    return pd.DataFrame(candidates, index=df.index) if candidates else pd.DataFrame()
+
+
+def _apply_basic_filter(candidate_df, min_cardinality, min_variance=1e-6):
+    """
+    Apply basic filtering: constant, low cardinality, high missing, low variance.
+    
+    Args:
+        candidate_df: DataFrame with candidate features
+        min_cardinality: Minimum number of unique values required
+        min_variance: Minimum variance threshold (default: 1e-6)
+    
+    Returns:
+        Filtered DataFrame
+    """
+    n_before = len(candidate_df.columns)
+    
+    # Remove constant, low cardinality, high missing, and low variance features
+    to_keep = []
+    removed_reasons = {'constant': 0, 'low_cardinality': 0, 'high_missing': 0, 'low_variance': 0}
+    
+    for col in candidate_df.columns:
+        # Check cardinality
+        unique_count = candidate_df[col].nunique()
+        if unique_count < min_cardinality:
+            removed_reasons['low_cardinality'] += 1
+            continue
+        
+        # Check missing values
+        missing_pct = candidate_df[col].isnull().mean()
+        if missing_pct > 0.5:
+            removed_reasons['high_missing'] += 1
+            continue
+        
+        # Check variance (new filtering criterion)
+        variance = candidate_df[col].var()
+        if pd.isna(variance) or variance < min_variance:
+            removed_reasons['low_variance'] += 1
+            continue
+        
+        # Check if constant (variance = 0)
+        if variance == 0:
+            removed_reasons['constant'] += 1
+            continue
+        
+        to_keep.append(col)
+    
+    candidate_df = candidate_df[to_keep]
+    
+    # Print detailed filtering results
+    print(f"  Basic filter: {n_before} → {len(candidate_df.columns)} features")
+    if any(removed_reasons.values()):
+        filter_details = [f"{reason}: {count}" for reason, count in removed_reasons.items() if count > 0]
+        print(f"    Removed - {', '.join(filter_details)}")
+    
+    return candidate_df
+
+
+def _apply_correlation_filter(candidate_df, threshold):
+    """Remove redundant features with high correlation."""
+    n_before = len(candidate_df.columns)
+    
+    corr_matrix = candidate_df.corr().abs()
+    to_remove = set()
+    
+    for i, col1 in enumerate(candidate_df.columns):
+        if col1 in to_remove:
+            continue
+        for col2 in candidate_df.columns[i+1:]:
+            if col2 not in to_remove and corr_matrix.loc[col1, col2] > threshold:
+                to_remove.add(col2)
+    
+    candidate_df = candidate_df.drop(columns=list(to_remove))
+    print(f"  Correlation filter: {n_before} → {len(candidate_df.columns)} features")
+    
+    return candidate_df
+
+
+def create_features_from_correlation_analysis(
+    df: pd.DataFrame,
+    analysis_results: Dict = None,
+    **kwargs
+) -> pd.DataFrame:
+    """Wrapper function using pre-computed analysis results."""
+    return create_features_from_high_correlation(
+        df=df, 
+        analysis_results=analysis_results, 
+        **kwargs
+    )
