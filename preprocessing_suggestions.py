@@ -1,9 +1,10 @@
-def suggest_missing_value_handling(analysis_results: dict) -> list:
+def suggest_missing_value_handling(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate handling suggestions for missing values based on analysis results.
 
     Args:
         analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
+        target_column: Name of the target column to skip or deal with differently.
 
     Returns:
         list: Preprocessing suggestions for missing value imputation or deletion.
@@ -17,6 +18,10 @@ def suggest_missing_value_handling(analysis_results: dict) -> list:
         missing_pct = info.get('missing_percentage', 0)
         missing_count = info.get('missing_count', 0)
         dtype = data_types.get(col, '')
+        
+        if col == target_column:
+            # Skip target column suggestions for now
+            continue
 
         if missing_pct == 0:
             continue
@@ -137,12 +142,13 @@ def suggest_duplicate_handling(analysis_results: dict) -> list:
     return suggestions
 
 
-def suggest_numerical_scaling(analysis_results: dict) -> list:
+def suggest_numerical_scaling(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate scaling suggestions for numerical features based on analysis results.
     
     Args:
         analysis_results: Dictionary from Adrian's analysis() function
+        target_column: Name of the target column to skip or deal with differently.
     
     Returns:
         list: Preprocessing suggestions for numerical scaling
@@ -166,6 +172,10 @@ def suggest_numerical_scaling(analysis_results: dict) -> list:
         
         # Check if column has outliers
         has_outliers = outlier_info.get(col, {}).get('outlier_count', 0) > 0
+        
+        if col == target_column:
+            # Skip target column suggestions for now
+            continue
         
         # Rule 1: High skewness (>1 or <-1) -> use standard scaler
         if abs(skewness) > 1:
@@ -200,12 +210,13 @@ def suggest_numerical_scaling(analysis_results: dict) -> list:
     return suggestions
 
 
-def suggest_outlier_handling(analysis_results: dict) -> list:
+def suggest_outlier_handling(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate outlier handling suggestions based on analysis results.
     
     Args:
         analysis_results: Dictionary from Adrian's analysis() function
+        target_column: Name of the target column to skip or deal with differently.
     
     Returns:
         list: Preprocessing suggestions for outlier handling
@@ -218,6 +229,10 @@ def suggest_outlier_handling(analysis_results: dict) -> list:
     for col, info in outlier_info.items():
         outlier_count = info.get('outlier_count', 0)
         outlier_percentage = info.get('outlier_percentage', 0)
+        
+        if col == target_column:
+            # Skip target column suggestions for now
+            continue
         
         # Only suggest if outliers exist
         if outlier_count > 0:
@@ -247,12 +262,13 @@ def suggest_outlier_handling(analysis_results: dict) -> list:
 
 
 
-def suggest_categorical_encoding(analysis_results: dict) -> list:
+def suggest_categorical_encoding(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate encoding suggestions for categorical features based on analysis results.
     
     Args:
         analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
+        target_column: Name of the target column to skip or deal with differently.
     
     Returns:
         list: Preprocessing suggestions for categorical encoding
@@ -264,9 +280,14 @@ def suggest_categorical_encoding(analysis_results: dict) -> list:
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
     
     for col, info in categorical_info.items():
+        if col == target_column:
+            # Skip target column suggestions for now
+            continue
+        
         unique_count = info.get('unique_values', 0)
         value_counts = info.get('value_counts', {})
         total_values = sum(value_counts.values()) if value_counts else 0
+        
         
         # Skip numeric columns
         if 'int' in data_types.get(col, '') or 'float' in data_types.get(col, ''):
@@ -326,66 +347,32 @@ def suggest_categorical_encoding(analysis_results: dict) -> list:
 
 def suggest_identifier_removal(analysis_results: dict) -> list:
     """
-    Generate suggestions to remove identifier columns.
-    
-    Detection Rules:
-    1. Column name contains 'id', 'index', 'uid', 'key'
-    2. OR unique values > 95% of total rows (high cardinality)
-    
-    Args:
-        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
-    
-    Returns:
-        list: Preprocessing suggestions for identifier removal
+    Generate suggestions to remove identifier columns using the ID columns
+    already detected by DataAnalyzer in analyze.py.
     """
     suggestions = []
-    
-    # Get data info
-    data_types = analysis_results.get('general_info', {}).get('data_types', {})
-    total_rows = analysis_results.get('general_info', {}).get('shape', [0])[0]
-    
-    # Keywords to detect
-    identifier_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
-    
-    # Collect all identifier columns
-    identifier_cols = []
-    
-    for col in data_types.keys():
-        # Check 1: Name contains identifier keyword
-        is_identifier = col.lower() in identifier_keywords
 
-        
-        # Check 2: High cardinality (>95% unique values)
-        is_high_cardinality = False
-        if total_rows > 0:
-            # Try to get unique count from feature_duplicate_info
-            feat_dup = analysis_results.get('feature_duplicate_info', {}).get(col, {})
-            if feat_dup:
-                duplicate_count = feat_dup.get('duplicate_count', 0)
-                unique_count = total_rows - duplicate_count
-                if unique_count / total_rows > 0.95:
-                    is_high_cardinality = True
-        
-        # Add to list if detected as identifier
-        if is_identifier or is_high_cardinality:
-            identifier_cols.append(col)
-    
-    # Only create ONE suggestion if any identifier columns found
-    # Because remove_identifier_columns processes all columns at once
-    if identifier_cols:
-        suggestions.append({
-            'feature': ', '.join(identifier_cols),
-            'issue': f'Identifier column(s) detected: {", ".join(identifier_cols)}',
-            'suggestion': 'Remove identifier columns as they provide no predictive value and can harm model performance.',
-            'function_to_call': 'remove_identifier_columns',
-            'kwargs': {'pattern': 'id', 'max_unique_ratio': 0.95}
-        })
-    
+    # Get the ID columns that were already detected and ignored in duplicate analysis
+    row_dup_info = analysis_results.get('row_duplicate_info', {})
+    identifier_cols = row_dup_info.get('ignored_columns', [])
+
+    if not identifier_cols:
+        return suggestions
+
+    suggestions.append({
+        'feature': ', '.join(identifier_cols),
+        'issue': f'Identifier column(s) detected: {', '.join(identifier_cols)}',
+        'suggestion': 'Remove identifier columns as they typically have no '
+                      'predictive value and can negatively impact model performance.',
+        'function_to_call': 'remove_identifier_columns',
+        'kwargs': {'id_columns': identifier_cols}
+    })
+
     return suggestions
 
 
 
-def suggest_datetime_features(analysis_results: dict) -> list:
+def suggest_datetime_features(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate suggestions for datetime feature engineering.
     
@@ -395,6 +382,7 @@ def suggest_datetime_features(analysis_results: dict) -> list:
     
     Args:
         analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
+        target_column: Name of the target column to skip or deal with differently.
     
     Returns:
         list: Preprocessing suggestions for datetime feature extraction
@@ -409,6 +397,10 @@ def suggest_datetime_features(analysis_results: dict) -> list:
     potential_datetime_cols = []
     
     for col, dtype in data_types.items():
+        if col == target_column:
+            # Skip target column suggestions for now
+            continue
+        
         # Check if already datetime type
         if 'datetime' in dtype.lower():
             datetime_cols.append(col)
