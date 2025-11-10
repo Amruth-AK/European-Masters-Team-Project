@@ -597,60 +597,19 @@ def frequency_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.Dat
 # Identifier Column Removal - Zhiqi 
 # ============================================================================
 
-def remove_identifier_columns(df: pd.DataFrame, **kwargs) -> pd.DataFrame:
+def remove_identifier_columns(df, id_columns=None, **kwargs):
     """
-    Automatically removes identifier columns based on a scoring system.
-
-    Detection Logic:
-    A column is considered an identifier if its combined score for uniqueness,
-    data type, and name (minus a null penalty) exceeds a set threshold.
-
-    Args:
-        df (pd.DataFrame): The input DataFrame.
-        **kwargs: Catches unused arguments to maintain compatibility with the calling environment.
-
-    Returns:
-        pd.DataFrame: A DataFrame with the detected identifier columns removed.
+    Remove identifier columns detected by DataAnalyzer.
     """
-    df_copy = df.copy()
-    id_candidates_to_remove = []
+    if not id_columns:
+        return df
 
-    # Return the original DataFrame if it's empty
-    if len(df_copy) == 0:
-        return df_copy
+    cols_to_drop = [col for col in id_columns if col in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
 
-    for col in df_copy.columns:
-        # Heuristic 1: Uniqueness
-        uniqueness_score = df_copy[col].nunique() / len(df_copy)
+    return df
 
-        # Heuristic 2: Data Type
-        dtype_score = 0
-        if pd.api.types.is_integer_dtype(df_copy[col]):
-            dtype_score = 0.2
-        elif pd.api.types.is_string_dtype(df_copy[col]):
-            dtype_score = 0.1
-
-        # Heuristic 3: Column Name (using the expanded keyword list from the old logic)
-        name_score = 0
-        if any(keyword in col.lower() for keyword in ['id', 'key', 'identifier', 'uuid', 'pk']):
-            name_score = 0.3
-
-        # Heuristic 4: Low Nulls (penalize for nulls)
-        null_penalty = df_copy[col].isnull().sum() / len(df_copy)
-
-        # Combine scores
-        total_score = uniqueness_score + dtype_score + name_score - null_penalty
-
-        # A threshold is used to identify columns for removal
-        if total_score > 0.8:  # This threshold can be adjusted
-            id_candidates_to_remove.append(col)
-
-    # If any ID columns were found, drop them and print a message
-    if id_candidates_to_remove:
-        df_copy = df_copy.drop(columns=id_candidates_to_remove)
-        print(f"Removed identifier columns: {id_candidates_to_remove}")
-
-    return df_copy
 
 
 # ============================================================================
