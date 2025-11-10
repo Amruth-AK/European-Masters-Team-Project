@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 from scipy.stats import skew
-from typing import List, Optional
+from typing import List
 
 class DataAnalyzer:
     def __init__(self, df: pd.DataFrame, target_column: str):
@@ -12,6 +12,7 @@ class DataAnalyzer:
             'general_info': {},
             'missing_values': {},
             'descriptive_statistics': {},
+            'numerical_summary': {},  # Added this key for compatibility
             'distributions': {},
             'correlations': {},
             'categorical_info': {},
@@ -22,41 +23,27 @@ class DataAnalyzer:
         }
 
     def _detect_id_columns(self) -> List[str]:
-        """
-        Automatically detects potential ID columns based on a scoring system.
-        The target column is always excluded from this check.
-        """
         id_candidates = []
-        # Exclude the target column from the search for identifiers
         columns_to_check = [col for col in self.df.columns if col != self.target_column]
-
         if len(self.df) == 0:
             return []
 
         for col in columns_to_check:
-            # Heuristic 1: Uniqueness
             uniqueness_score = self.df[col].nunique() / len(self.df)
-
-            # Heuristic 2: Data Type
             dtype_score = 0
             if pd.api.types.is_integer_dtype(self.df[col]):
                 dtype_score = 0.2
             elif pd.api.types.is_string_dtype(self.df[col]):
                 dtype_score = 0.1
 
-            # Heuristic 3: Column Name (using the expanded keyword list from the old logic)
             name_score = 0
             if any(keyword in col.lower() for keyword in ['id', 'key', 'identifier', 'uuid', 'pk']):
                 name_score = 0.3
 
-            # Heuristic 4: Low Nulls (penalize for nulls)
             null_penalty = self.df[col].isnull().sum() / len(self.df)
-
-            # Combine scores
             total_score = uniqueness_score + dtype_score + name_score - null_penalty
 
-            # A threshold is used to identify suitable ID columns
-            if total_score > 0.8:  # This threshold can be adjusted
+            if total_score > 0.8:
                 id_candidates.append(col)
 
         print(f"Automatically detected ID columns: {id_candidates}")
@@ -93,11 +80,53 @@ class DataAnalyzer:
     # --- 4. Numerical Analysis ---
     def analyze_numerical(self):
         numerical_cols = self.df.select_dtypes(include=np.number).columns.tolist()
-        # Exclude automatically detected ID columns from numerical analysis
         numerical_cols = [col for col in numerical_cols if col not in self.id_columns_to_ignore]
 
-        desc_stats = self.df[numerical_cols].describe().to_dict()
+        desc_stats = {}
+        numerical_summary = {}
+        for col in numerical_cols:
+            col_data = self.df[col].dropna()
+            stats = col_data.describe().to_dict()
+            stats['std'] = float(col_data.std() if not col_data.empty else 0.0)
+            desc_stats[col] = stats
+            numerical_summary[col] = stats  # populate numerical_summary for the suggestion function
+
+            # Distributions
+            self.results['distributions'][col] = {'skewness': float(skew(col_data)) if len(col_data) > 1 else 0.0}
+
+            # Histogram
+            counts, bin_edges = np.histogram(col_data, bins='auto')
+            self.results['histogram_data'][col] = {
+                'counts': counts.tolist(),
+                'bin_edges': bin_edges.tolist()
+            }
+
+            # Outliers (IQR method)
+            Q1 = stats['25%']
+            Q3 = stats['75%']
+            IQR = Q3 - Q1
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+            lower_outliers = self.df[self.df[col] < lower_bound]
+            upper_outliers = self.df[self.df[col] > upper_bound]
+            lower_count = len(lower_outliers)
+            upper_count = len(upper_outliers)
+            total_count = lower_count + upper_count
+            total_rows = len(self.df)
+
+            self.results['outlier_info'][col] = {
+                'lower_bound': lower_bound,
+                'upper_bound': upper_bound,
+                'outlier_count': total_count,
+                'outlier_percentage': (total_count / total_rows) * 100 if total_rows > 0 else 0,
+                'lower_outlier_count': lower_count,
+                'lower_outlier_percentage': (lower_count / total_rows) * 100 if total_rows > 0 else 0,
+                'upper_outlier_count': upper_count,
+                'upper_outlier_percentage': (upper_count / total_rows) * 100 if total_rows > 0 else 0,
+            }
+
         self.results['descriptive_statistics'] = desc_stats
+        self.results['numerical_summary'] = numerical_summary  # <-- important for constant detection
 
         # Correlations
         if numerical_cols:
@@ -110,44 +139,6 @@ class DataAnalyzer:
         else:
             self.results['correlations'] = {}
 
-        # Distributions and Outliers
-        total_rows = len(self.df)
-        for col in numerical_cols:
-            col_data = self.df[col].dropna()
-            self.results['distributions'][col] = {'skewness': skew(col_data)}
-
-            # Histogram
-            counts, bin_edges = np.histogram(col_data, bins='auto')
-            self.results['histogram_data'][col] = {
-                'counts': counts.tolist(),
-                'bin_edges': bin_edges.tolist()
-            }
-
-            Q1 = desc_stats[col]['25%']
-            Q3 = desc_stats[col]['75%']
-            IQR = Q3 - Q1
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
-            # Find lower and upper outliers separately
-            lower_outliers = self.df[self.df[col] < lower_bound]
-            upper_outliers = self.df[self.df[col] > upper_bound]
-
-            # Get the counts
-            lower_outlier_count = len(lower_outliers)
-            upper_outlier_count = len(upper_outliers)
-            total_outlier_count = lower_outlier_count + upper_outlier_count
-
-            # Store all information in the results dictionary
-            self.results['outlier_info'][col] = {
-                'lower_bound': lower_bound,
-                'upper_bound': upper_bound,
-                'outlier_count': total_outlier_count,
-                'outlier_percentage': (total_outlier_count / total_rows) * 100 if total_rows > 0 else 0,
-                'lower_outlier_count': lower_outlier_count,
-                'lower_outlier_percentage': (lower_outlier_count / total_rows) * 100 if total_rows > 0 else 0,
-                'upper_outlier_count': upper_outlier_count,
-                'upper_outlier_percentage': (upper_outlier_count / total_rows) * 100 if total_rows > 0 else 0,
-            }
         return self
 
     # --- 5. Categorical Analysis ---
@@ -162,50 +153,32 @@ class DataAnalyzer:
 
     # --- 6. Duplicate Analysis ---
     def analyze_row_duplicates(self):
-        # Determine the columns to check for duplicates, excluding ID columns
         cols_to_check = self.df.columns.drop(self.id_columns_to_ignore).tolist()
-        
-        if not cols_to_check:
-            # Handle case where all columns are considered IDs
-            df_for_duplicates_check = self.df
-        else:
-            df_for_duplicates_check = self.df[cols_to_check]
-
+        df_for_duplicates_check = self.df if not cols_to_check else self.df[cols_to_check]
         duplicate_mask = df_for_duplicates_check.duplicated(keep=False)
         duplicate_rows_df = self.df[duplicate_mask]
-        num_duplicates = len(duplicate_rows_df)
         total_rows = len(self.df)
-
         self.results['row_duplicate_info'] = {
-            'total_duplicates': num_duplicates,
-            'duplicate_percentage': (num_duplicates / total_rows) * 100 if total_rows > 0 else 0,
-            'duplicate_rows': duplicate_rows_df.sort_values(
-                by=list(df_for_duplicates_check.columns)
-            ).to_dict('records'),
+            'total_duplicates': len(duplicate_rows_df),
+            'duplicate_percentage': (len(duplicate_rows_df) / total_rows) * 100 if total_rows > 0 else 0,
+            'duplicate_rows': duplicate_rows_df.sort_values(by=list(df_for_duplicates_check.columns)).to_dict('records'),
             'ignored_columns': self.id_columns_to_ignore
         }
         return self
 
     def analyze_feature_duplicates(self):
-        """Analyzes each column for duplicate values and their frequency."""
         total_rows = len(self.df)
         for col in self.df.columns:
-            if total_rows > 0:
-                duplicate_count = total_rows - self.df[col].nunique()
-                value_counts = self.df[col].value_counts()
-                if not value_counts.empty:
-                    most_frequent_value = value_counts.index[0]
-                    most_frequent_count = int(value_counts.iloc[0])
-                else:
-                    most_frequent_value = None
-                    most_frequent_count = 0
-
-                self.results['feature_duplicate_info'][col] = {
-                    'duplicate_count': duplicate_count,
-                    'duplicate_percentage': (duplicate_count / total_rows) * 100 if total_rows > 0 else 0,
-                    'most_frequent_value': most_frequent_value,
-                    'most_frequent_count': most_frequent_count
-                }
+            duplicate_count = total_rows - self.df[col].nunique()
+            value_counts = self.df[col].value_counts()
+            most_frequent_value = value_counts.index[0] if not value_counts.empty else None
+            most_frequent_count = int(value_counts.iloc[0]) if not value_counts.empty else 0
+            self.results['feature_duplicate_info'][col] = {
+                'duplicate_count': duplicate_count,
+                'duplicate_percentage': (duplicate_count / total_rows) * 100 if total_rows > 0 else 0,
+                'most_frequent_value': most_frequent_value,
+                'most_frequent_count': most_frequent_count
+            }
         return self
 
     # --- 7. Run Full Analysis ---

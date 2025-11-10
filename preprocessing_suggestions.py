@@ -361,7 +361,7 @@ def suggest_identifier_removal(analysis_results: dict) -> list:
 
     suggestions.append({
         'feature': ', '.join(identifier_cols),
-        'issue': f'Identifier column(s) detected: {', '.join(identifier_cols)}',
+        'issue': f"Identifier column(s) detected: {', '.join(identifier_cols)}",
         'suggestion': 'Remove identifier columns as they typically have no '
                       'predictive value and can negatively impact model performance.',
         'function_to_call': 'remove_identifier_columns',
