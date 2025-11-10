@@ -634,18 +634,14 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
 def suggest_feature_combination(analysis_results: dict, target_column: str = None) -> list:
     """
     Generates suggestions for creating new features by combining categorical columns.
-
-    Args:
-        analysis_results: Dictionary from DataAnalyzer().run_full_analysis().
-
-    Returns:
-        list: Preprocessing suggestions for feature combination.
+    For each combination, it also suggests an appropriate encoding for the new feature.
     """
     suggestions = []
     categorical_info = analysis_results.get('categorical_info', {})
-    categorical_cols = list(categorical_info.keys())
 
-    # We need at least two categorical columns to create combinations
+    # Exclude the target column from feature combination suggestions
+    categorical_cols = [col for col in categorical_info.keys() if col != target_column]
+
     if len(categorical_cols) < 2:
         return suggestions
 
@@ -653,19 +649,31 @@ def suggest_feature_combination(analysis_results: dict, target_column: str = Non
     column_pairs = list(itertools.combinations(categorical_cols, 2))
 
     for col1, col2 in column_pairs:
-        if target_column and target_column not in [col1, col2]:
-            new_col_name = f"{col1}_{col2}_combined"
-            suggestions.append({
-                'feature': f"'{col1}' and '{col2}'",
-                'issue': "Potential to capture interaction effects between features.",
-                'suggestion': (f"Combine '{col1}' and '{col2}' into a single feature "
-                            "to potentially improve model performance by representing their interaction."),
-                'function_to_call': 'combine_categorical_features',
-                'kwargs': {
-                    'columns_to_combine': [col1, col2],
-                    'new_col_name': new_col_name,
-                    'drop_original': False
-                }
-            })
+        new_col_name = f"{col1}_{col2}_combined"
+
+        # Suggestion to create the combined feature
+        suggestions.append({
+            'feature': f"'{col1}' and '{col2}'",
+            'issue': "Potential to capture interaction effects between features.",
+            'suggestion': (f"Combine '{col1}' and '{col2}' into a single feature "
+                           f"'{new_col_name}' to represent their interaction."),
+            'function_to_call': 'combine_categorical_features',
+            'kwargs': {
+                'columns_to_combine': [col1, col2],
+                'new_col_name': new_col_name,
+                'drop_original': False
+            }
+        })
+
+        # Suggestion to encode the newly created feature.
+        # Since combined features often have high cardinality, Label Encoding is a safe default.
+        suggestions.append({
+            'feature': new_col_name,
+            'issue': f"The new feature '{new_col_name}' is categorical and requires encoding for use in most models.",
+            'suggestion': ("Apply Label Encoding to convert this new feature into a numerical format. "
+                           "This is a good starting point for combined features which may have many unique values."),
+            'function_to_call': 'label_encode',
+            'kwargs': {'columns': new_col_name}
+        })
 
     return suggestions
