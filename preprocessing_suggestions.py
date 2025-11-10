@@ -633,3 +633,41 @@ def suggest_correlation_based_features(analysis_results: dict) -> list:
     })
     
     return suggestions
+
+def suggest_feature_combination(analysis_results: dict) -> list:
+    """
+    Generates suggestions for creating new features by combining categorical columns.
+
+    Args:
+        analysis_results: Dictionary from DataAnalyzer().run_full_analysis().
+
+    Returns:
+        list: Preprocessing suggestions for feature combination.
+    """
+    suggestions = []
+    categorical_info = analysis_results.get('categorical_info', {})
+    categorical_cols = list(categorical_info.keys())
+
+    # We need at least two categorical columns to create combinations
+    if len(categorical_cols) < 2:
+        return suggestions
+
+    # Generate all unique pairs of categorical columns
+    column_pairs = list(itertools.combinations(categorical_cols, 2))
+
+    for col1, col2 in column_pairs:
+        new_col_name = f"{col1}_{col2}_combined"
+        suggestions.append({
+            'feature': f"'{col1}' and '{col2}'",
+            'issue': "Potential to capture interaction effects between features.",
+            'suggestion': (f"Combine '{col1}' and '{col2}' into a single feature "
+                           "to potentially improve model performance by representing their interaction."),
+            'function_to_call': 'combine_categorical_features',
+            'kwargs': {
+                'columns_to_combine': [col1, col2],
+                'new_col_name': new_col_name,
+                'drop_original': False
+            }
+        })
+
+    return suggestions
