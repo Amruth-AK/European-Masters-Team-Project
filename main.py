@@ -53,6 +53,64 @@ def display_home_page():
     # Show Data Preview
     if st.session_state.df is not None:
         st.dataframe(st.session_state.df.head(), use_container_width=True)
+        
+        # --- NEW: Data Type Override Section ---
+        with st.expander("🔧 Manually Adjust Column Data Types", expanded=False):
+            st.info("Here you can override the data types inferred by the system. For example, a numerical ID column can be correctly set as 'Categorical'.")
+
+            # Define the mapping from user-friendly names to pandas dtypes
+            dtype_options = {
+                "Numerical": "float64",
+                "Categorical": "category",
+                "Datetime": "datetime64[ns]",
+                "Object (Text)": "object"
+            }
+            options_list = list(dtype_options.keys())
+
+            modified_df = st.session_state.df.copy()
+            cols_per_row = 3
+            ui_cols = st.columns(cols_per_row)
+
+            for i, col_name in enumerate(modified_df.columns):
+                with ui_cols[i % cols_per_row]:
+                    inferred_dtype = str(modified_df[col_name].dtype)
+
+                    # Determine the default index for the selectbox
+                    try:
+                        # Find which user-friendly option matches the inferred type
+                        default_index = options_list.index(next(key for key, val in dtype_options.items() if val in inferred_dtype))
+                    except (StopIteration, ValueError):
+                        # If no direct match (e.g., 'int64'), default to Numerical or Object
+                        if 'int' in inferred_dtype or 'float' in inferred_dtype:
+                             default_index = options_list.index("Numerical")
+                        else:
+                             default_index = options_list.index("Object (Text)")
+
+                    # Create a selectbox for each column
+                    selected_type_str = st.selectbox(
+                        label=f"**{col_name}** (Inferred: *{inferred_dtype}*)",
+                        options=options_list,
+                        index=default_index,
+                        key=f"dtype_override_{col_name}" # Unique key is crucial
+                    )
+
+                    # Apply the new type if it's different from the original
+                    new_dtype = dtype_options[selected_type_str]
+                    if new_dtype != inferred_dtype:
+                        try:
+                            if new_dtype == 'datetime64[ns]':
+                                modified_df[col_name] = pd.to_datetime(modified_df[col_name])
+                            else:
+                                modified_df[col_name] = modified_df[col_name].astype(new_dtype)
+                        except Exception as e:
+                            st.error(f"Failed to convert '{col_name}' to {selected_type_str}. Reverting. Error: {e}")
+                            # Revert on failure
+                            modified_df[col_name] = st.session_state.df[col_name]
+
+
+            # Persist the changes back to the session state
+            st.session_state.df = modified_df
+        # --- End of New Section ---
 
         # Target Column Selection
         st.session_state.target_column = st.selectbox(
