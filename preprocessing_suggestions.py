@@ -648,10 +648,6 @@ def suggest_feature_combination(analysis_results: dict, target_column: str = Non
     # Generate all unique pairs of categorical columns
     column_pairs = list(itertools.combinations(categorical_cols, 2))
 
-    # Limit the number of suggestions to avoid overwhelming the user
-    if len(column_pairs) > 5:
-        column_pairs = column_pairs[:5]
-
     for col1, col2 in column_pairs:
         new_col_name = f"{col1}_{col2}_combined"
 
