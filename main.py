@@ -6,6 +6,7 @@ from analyze import DataAnalyzer
 from dashboard import create_dashboard
 from pre_dashboard import run_preprocessing_dashboard
 from model_suggestion import run_model_suggestions  
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Interactive Data Analysis Tool",
@@ -24,9 +25,6 @@ if 'pre_status' not in st.session_state:
     st.session_state.pre_status = None
 if 'pre_df' not in st.session_state:
     st.session_state.pre_df = None
-if 'id_columns' not in st.session_state:
-    st.session_state.id_columns = []
-
 
 # --- Home Page ---
 def display_home_page():
@@ -61,22 +59,16 @@ def display_home_page():
             "🎯 Select the target column for analysis (e.g., prediction target)",
             options=st.session_state.df.columns
         )
-        # ID Column Selection
-        st.session_state.id_columns = st.multiselect(
-            "Select identifier columns to exclude from duplicate row analysis (optional)",
-            options=st.session_state.df.columns,
-            help="Choose columns like 'ID', 'user_id', etc. The tool will check for duplicates based on all *other* columns."
-        )
 
         col1, col2 = st.columns([1, 1])
 
         # Analyze Button
         if col1.button("📊 Run Data Analysis", use_container_width=True):
-            with st.spinner("Running comprehensive analysis..."):
+            with st.spinner("Running comprehensive analysis... This may take a moment."):
+                # Instantiate DataAnalyzer without id_columns_to_ignore for auto-detection
                 analyzer_instance = DataAnalyzer(
                     df=st.session_state.df,
-                    target_column=st.session_state.target_column,
-                     id_columns_to_ignore=st.session_state.id_columns
+                    target_column=st.session_state.target_column
                 )
                 st.session_state.analysis_results = analyzer_instance.run_full_analysis()
             st.success("✅ Analysis complete! Use the sidebar to explore results.")
@@ -86,7 +78,6 @@ def display_home_page():
             for key in ['df', 'analysis_results', 'target_column', 'pre_status', 'pre_df']:
                 st.session_state[key] = None
             st.rerun()
-
 
 # --- Sidebar Navigation ---
 pages = [
@@ -106,32 +97,25 @@ pages = [
 st.sidebar.title("📚 Navigation")
 selected_page = st.sidebar.radio("Go to", pages)
 
-
 # --- Page Routing Logic ---
 if selected_page == "Home":
     display_home_page()
 
 elif selected_page == "Preprocessing Suggestions":
     if st.session_state.analysis_results and st.session_state.df is not None:
-        # Call preprocessing dashboard
         final_df = run_preprocessing_dashboard(
             st.session_state.analysis_results,
             st.session_state.df
         )
-        # Update main DataFrame after preprocessing
         st.session_state.df = final_df
     else:
         st.warning("⚠️ Please upload a dataset and run the analysis first.")
 
 elif selected_page == "Model Suggestions":
     if st.session_state.df is not None and st.session_state.target_column:
-        
-        # ✅ Ensure preprocessing has been finalized first
         if st.session_state.pre_status not in ["applied", "ignored"]:
             st.warning("⚠️ Please finish preprocessing first by applying or ignoring the suggestions.")
-        
         else:
-            # ✅ Run model suggestions only once per preprocessing decision
             if "model_results" not in st.session_state or st.session_state.model_results is None:
                 st.info("💡 Comparing multiple models to find the best one...")
                 st.session_state.model_results = run_model_suggestions(
@@ -149,7 +133,6 @@ elif selected_page == "Model Suggestions":
         st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
 
 else:
-    # Render standard analysis dashboards
     if st.session_state.analysis_results:
         create_dashboard(st.session_state.analysis_results, selected_page)
     else:
