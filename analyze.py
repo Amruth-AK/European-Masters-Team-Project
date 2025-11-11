@@ -40,14 +40,16 @@ class DataAnalyzer:
             # Heuristic 2: Data Type
             dtype_score = 0
             if pd.api.types.is_integer_dtype(self.df[col]):
-                dtype_score = 0.2
+                dtype_score = 0.25
             elif pd.api.types.is_string_dtype(self.df[col]):
-                dtype_score = 0.1
+                dtype_score = 0.05
+            elif pd.api.types.is_float_dtype(self.df[col]):
+                dtype_score = -0.3    
 
             # Heuristic 3: Column Name (using the expanded keyword list from the old logic)
             name_score = 0
             if any(keyword in col.lower() for keyword in ['id', 'key', 'identifier', 'uuid', 'pk']):
-                name_score = 0.3
+                name_score = 0.5
 
             # Heuristic 4: Low Nulls (penalize for nulls)
             null_penalty = self.df[col].isnull().sum() / len(self.df)
@@ -56,7 +58,7 @@ class DataAnalyzer:
             total_score = uniqueness_score + dtype_score + name_score - null_penalty
 
             # A threshold is used to identify suitable ID columns
-            if total_score > 0.8:  # This threshold can be adjusted
+            if total_score > 1.4:  # This threshold can be adjusted
                 id_candidates.append(col)
 
         print(f"Automatically detected ID columns: {id_candidates}")
