@@ -9,9 +9,9 @@ from preprocessing_suggestions import (
     suggest_numerical_scaling,
     suggest_categorical_encoding,
     suggest_identifier_removal,
-    suggest_datetime_features,
     suggest_correlation_based_features,
-    suggest_feature_combination
+    suggest_feature_combination,
+    suggest_fastica_features
 )
 from preprocessing_function import (
     delete_missing_columns,
@@ -33,7 +33,8 @@ from preprocessing_function import (
     calculate_datetime_diff,
     extract_datetime_features,
     create_features_from_correlation_analysis,
-    combine_categorical_features
+    combine_categorical_features,
+    apply_fastica
 )
 
 # Map string function names to actual functions
@@ -57,7 +58,8 @@ FUNC_MAP = {
     'calculate_datetime_diff': calculate_datetime_diff,
     'extract_datetime_features': extract_datetime_features,
     'create_features_from_correlation_analysis': create_features_from_correlation_analysis,
-    'combine_categorical_features': combine_categorical_features
+    'combine_categorical_features': combine_categorical_features,
+    'apply_fastica': apply_fastica
 }
 
 
@@ -101,7 +103,8 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Correlation-based Features", suggest_correlation_based_features(analysis_results, target_column)),
         ("Feature Combination", suggest_feature_combination(analysis_results, target_column)),
         ("Categorical Encoding", suggest_categorical_encoding(analysis_results, target_column)),
-        ("Identifier Removal", suggest_identifier_removal(analysis_results))
+        ("Identifier Removal", suggest_identifier_removal(analysis_results)),
+        ("FastICA Feature Extraction", suggest_fastica_features(analysis_results, target_column))
     ]
     valid_steps = [(name, sug) for name, sug in steps if sug]
 
