@@ -361,7 +361,7 @@ def suggest_identifier_removal(analysis_results: dict) -> list:
 
     suggestions.append({
         'feature': ', '.join(identifier_cols),
-        'issue': f'Identifier column(s) detected: {', '.join(identifier_cols)}',
+        'issue': f"Identifier column(s) detected: {', '.join(identifier_cols)}",
         'suggestion': 'Remove identifier columns as they typically have no '
                       'predictive value and can negatively impact model performance.',
         'function_to_call': 'remove_identifier_columns',
@@ -679,4 +679,107 @@ def suggest_feature_combination(analysis_results: dict, target_column: str = Non
             'kwargs': {'columns': new_col_name}
         })
 
+    return suggestions
+
+def suggest_fastica_features(analysis_results: dict, target_column: str = None) -> list:
+    """
+    Suggest applying FastICA to capture global trends across multiple features.
+    
+    FastICA is recommended when:
+    - Dataset has many numerical features (>10)
+    - Features show complex correlations
+    - Data is likely non-Gaussian
+    - Dimensionality reduction is needed
+    
+    Args:
+        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
+        target_column: Name of target column
+    
+    Returns:
+        list: Preprocessing suggestions for FastICA
+    """
+    suggestions = []
+    
+    # Get data info
+    general_info = analysis_results.get('general_info', {})
+    data_types = general_info.get('data_types', {})
+    shape = general_info.get('shape', [0, 0])
+    n_samples, n_features = shape[0], shape[1]
+    
+    # Count numerical features
+    numerical_cols = [col for col, dtype in data_types.items() 
+                     if 'int' in dtype or 'float' in dtype]
+    
+    # Exclude target
+    if target_column and target_column in numerical_cols:
+        numerical_cols.remove(target_column)
+    
+    n_numerical = len(numerical_cols)
+    
+    # Decision rules
+    should_suggest = False
+    issue_msg = ""
+    suggestion_msg = ""
+    n_components = None
+    
+    # Rule 1: Many numerical features (>10)
+    if n_numerical > 10:
+        should_suggest = True
+        issue_msg = f"Dataset has {n_numerical} numerical features. FastICA can extract global trends using intelligent hybrid mode."
+        suggestion_msg = (
+            f"Apply FastICA in hybrid mode to intelligently replace redundant features and add independent components. "
+            f"This captures underlying patterns across {n_numerical} features while optimizing dimensionality."
+        )
+        n_components = min(5, n_numerical // 2, n_samples // 10)
+        n_components = max(2, n_components)
+    
+    # Rule 2: High dimensionality (>20 features)
+    elif n_features > 20:
+        should_suggest = True
+        issue_msg = f"High-dimensional dataset ({n_features} features). FastICA can help reduce complexity using intelligent hybrid mode."
+        suggestion_msg = (
+            f"Apply FastICA in hybrid mode to extract independent components and reduce feature space. "
+            f"The system will automatically determine optimal replacement ratio based on data characteristics."
+        )
+        n_components = min(5, n_numerical // 2)
+        n_components = max(2, n_components)
+    
+    # Rule 3: Complex correlations detected
+    correlations = analysis_results.get('correlations', {})
+    if correlations:
+        corr_matrix = correlations.get('correlation_matrix', {})
+        if corr_matrix:
+            # Check if there are many high correlations (complex structure)
+            try:
+                corr_df = pd.DataFrame(corr_matrix)
+                high_corr_count = (corr_df.abs() > 0.5).sum().sum() - len(corr_df)  # Exclude diagonal
+                if high_corr_count > n_numerical * 2:  # Many correlations
+                    should_suggest = True
+                    issue_msg = f"Complex correlation structure detected ({high_corr_count} high correlations)."
+                    suggestion_msg = (
+                        f"FastICA in hybrid mode can extract independent signals from correlated features, "
+                        f"intelligently replacing redundant ones while capturing global trends."
+                    )
+                    n_components = min(5, n_numerical // 2)
+                    n_components = max(2, n_components)
+            except:
+                pass
+    
+    if should_suggest and n_components:
+        suggestions.append({
+            'feature': 'multiple',
+            'issue': issue_msg,
+            'suggestion': suggestion_msg,
+            'function_to_call': 'apply_fastica',
+            'kwargs': {
+                'n_components': n_components,
+                'target_column': target_column,
+                'mode': 'hybrid',  
+                'replace_ratio': None,
+                'analysis_results': analysis_results,
+                'random_state': 42,
+                'whiten': 'unit-variance'
+            }
+        })
+    
     return suggestions
