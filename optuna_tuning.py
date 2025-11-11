@@ -1,6 +1,6 @@
 # optuna_tuning.py
 
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import math
 
 import numpy as np
@@ -231,6 +231,7 @@ def tune_model_with_optuna(
     problem_type: str,
     eval_metric: str,
     n_trials: int = 30,
+    time_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Tune hyperparameters with Optuna for the SAME model family that AutoGluon chose.
@@ -256,7 +257,10 @@ def tune_model_with_optuna(
     dict with keys:
         - best_model_class : str
         - best_params      : Dict[str, Any]
-        - best_model       : fitted model
+        - best_model       : fitted model (trained on ALL data)
+        - best_objective   : float (value minimized by Optuna)
+        - best_eval_score  : float (human-friendly metric: RMSE / AUC / log_loss)
+        - metric_name      : str (original metric name)
         - study            : Optuna study object
     """
     if target_column not in df.columns:
@@ -284,7 +288,9 @@ def tune_model_with_optuna(
         X, y, test_size=0.2, random_state=42, stratify=stratify
     )
 
-    eval_metric = (eval_metric or "").lower()
+    # Keep both the original name and a lower-cased internal version
+    metric_name = eval_metric
+    metric_internal = (eval_metric or "").lower()
 
     def objective(trial: optuna.Trial) -> float:
         ModelClass = _choose_model_class(model_family, problem_type)
@@ -303,8 +309,8 @@ def tune_model_with_optuna(
             # Old sklearn doesn't support squared=False, so compute RMSE manually
             mse = mean_squared_error(y_valid, y_pred)
             rmse = np.sqrt(mse)
+            # For regression we MINIMIZE RMSE directly
             return rmse
-
 
         # Classification: need probabilities
         if hasattr(model, "predict_proba"):
@@ -317,16 +323,34 @@ def tune_model_with_optuna(
             for i, c in enumerate(classes):
                 proba[:, i] = (y_pred == c).astype(float)
 
-        if eval_metric == "roc_auc" and pt == "binary":
+        # Binary AUC → we MINIMIZE (1 - AUC)
+        if metric_internal == "roc_auc" and pt == "binary":
             auc = roc_auc_score(y_valid, proba[:, 1])
-            # We minimize, so 1 - AUC
             return 1.0 - auc
 
         # Default for classification: log_loss (works for binary & multiclass)
         return log_loss(y_valid, proba)
 
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=n_trials)
+
+    # If time_limit is set (in seconds), stop after that many seconds overall
+    if time_limit is not None:
+        study.optimize(objective, n_trials=n_trials, timeout=time_limit)
+    else:
+        study.optimize(objective, n_trials=n_trials)
+
+
+    # --- Convert Optuna objective back into human-friendly score ---
+    best_objective = study.best_value
+    if is_reg:
+        # objective is RMSE already
+        best_eval_score = best_objective
+    elif metric_internal == "roc_auc" and pt == "binary":
+        # objective = 1 - AUC → AUC = 1 - objective
+        best_eval_score = 1.0 - best_objective
+    else:
+        # log_loss or any other "lower is better" metric
+        best_eval_score = best_objective
 
     # --- Refit best model on FULL data (X, y) ---
     ModelClass = _choose_model_class(model_family, problem_type)
@@ -341,6 +365,7 @@ def tune_model_with_optuna(
         best_params.setdefault("verbose", 0)
         best_params.setdefault("random_state", 42)
 
+    # 👉 This is your "another model" with the exact best hyperparameters
     best_model = ModelClass(**best_params)
     best_model.fit(X, y)
 
@@ -348,5 +373,8 @@ def tune_model_with_optuna(
         "best_model_class": ModelClass.__name__,
         "best_params": best_params,
         "best_model": best_model,
+        "best_objective": best_objective,
+        "best_eval_score": best_eval_score,
+        "metric_name": metric_name,
         "study": study,
     }
