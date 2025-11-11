@@ -51,7 +51,7 @@ def _infer_model_family(model_name: str) -> str:
         return "random_forest"
     if "extratrees" in name or "et_" in name:
         return "extra_trees"
-    if "knn" in name:
+    if "knn" in name or "kneighbors" in name:
         return "knn"
     if "nn_" in name or "neuralnet" in name:
         return "neural_network"
@@ -65,7 +65,7 @@ def run_model_suggestions(
     df: pd.DataFrame,
     target_column: str,
     time_limit: Optional[int] = None,
-    presets: str = "medium_quality_faster_train",
+    presets: str = "high_quality",
 ) -> Dict[str, Any]:
     """
     Train models with AutoGluon and return artifacts that can be used
@@ -135,13 +135,28 @@ def run_model_suggestions(
     )
 
     # Get leaderboard
+        # Get leaderboard
     leaderboard = predictor.leaderboard(silent=True)
     if leaderboard is None or leaderboard.empty:
         raise RuntimeError("No models were trained successfully; leaderboard is empty.")
 
-    # Best model is first row in leaderboard
-    best_model_name = str(leaderboard.iloc[0]["model"])
+    # Prefer the best NON-ENSEMBLE model as the base model family
+    model_series = leaderboard["model"].astype(str)
+
+    non_ensemble_rows = leaderboard[
+        ~model_series.str.contains("weightedensemble", case=False, na=False)
+    ]
+
+    if not non_ensemble_rows.empty:
+        # Take the best base model (first non-ensemble row)
+        best_row = non_ensemble_rows.iloc[0]
+    else:
+        # Fallback: if for some reason we only have ensembles, use the top one
+        best_row = leaderboard.iloc[0]
+
+    best_model_name = str(best_row["model"])
     best_model_family = _infer_model_family(best_model_name)
+
 
     # Compute feature importance for downstream feature selection
     try:

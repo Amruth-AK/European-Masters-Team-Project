@@ -5,6 +5,9 @@ import pandas as pd
 from analyze import DataAnalyzer
 from dashboard import create_dashboard
 from pre_dashboard import run_preprocessing_dashboard
+from model_suggestion import run_model_suggestions
+from feature_selection import select_features_by_importance
+from optuna_tuning import tune_model_with_optuna
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -24,6 +27,8 @@ if 'pre_status' not in st.session_state:
     st.session_state.pre_status = None
 if 'pre_df' not in st.session_state:
     st.session_state.pre_df = None
+if 'modeling_results' not in st.session_state:
+    st.session_state.modeling_results = None
 
 # --- Home Page ---
 def display_home_page():
@@ -132,7 +137,7 @@ def display_home_page():
 
         # Remove Dataset Button
         if col2.button("🗑️ Clear Dataset", use_container_width=True):
-            for key in ['df', 'analysis_results', 'target_column', 'pre_status', 'pre_df']:
+            for key in ['df', 'analysis_results', 'target_column', 'pre_status', 'pre_df', 'modeling_results']:
                 st.session_state[key] = None
             st.rerun()
 
@@ -169,27 +174,117 @@ elif selected_page == "Preprocessing Suggestions":
         st.warning("⚠️ Please upload a dataset and run the analysis first.")
 
 elif selected_page == "Model Suggestions":
-    # This page is now a placeholder / info page.
-    # Model selection & hyperparameter tuning will be handled
-    # internally (e.g. via Optuna) in a separate backend step.
+    # Model selection and hyperparameter tuning page.
     if st.session_state.df is not None and st.session_state.target_column:
+        # Require preprocessing to be decided first
         if st.session_state.pre_status not in ["applied", "ignored"]:
             st.warning(
-                "⚠️ Please finish preprocessing first by applying or ignoring the suggestions "
-                "on the Preprocessing page."
+                "⚠️ Please finish preprocessing first by applying or ignoring the "
+                "suggestions on the Preprocessing page."
             )
         else:
-            st.title("🤖 Model & Hyperparameter Suggestions")
-            st.info(
-                "The next step of the pipeline will:\n"
-                "- Use the internally selected best model as input to Optuna for hyperparameter tuning\n"
-                "- Use feature importance to remove irrelevant features\n\n"
-                "This page is currently a placeholder and does not run AutoGluon directly."
+            st.title("🤖 Model Suggestions")
+
+            # Use preprocessed data if available, otherwise raw df
+            data_for_modeling = (
+                st.session_state.pre_df
+                if st.session_state.pre_df is not None
+                else st.session_state.df
             )
+
+            results = st.session_state.get("modeling_results")
+
+            if results is None:
+                st.info(
+                    "This step will:\n"
+                    "- Identify the best model family using an internal model search\n"
+                    "- Use feature importance to remove irrelevant features\n"
+                    "- Run Optuna to find the best hyperparameters for a pure sklearn model."
+                )
+
+                if st.button("🚀 Run model search and hyperparameter tuning", use_container_width=True):
+                    target_column = st.session_state.target_column
+
+                    # 1) AutoGluon search (no UI, just backend helper)
+                    st.info("🔍 Identifying the best model...")
+                    with st.spinner("Identifying the best model..."):
+                        ag_results = run_model_suggestions(
+                            data_for_modeling,
+                            target_column=target_column,
+                        )
+
+                    # 2) Feature selection based on importance
+                    st.info("🧬 Selecting most relevant features...")
+                    with st.spinner("Selecting most relevant features..."):
+                        reduced_df, selected_features = select_features_by_importance(
+                            df=data_for_modeling,
+                            target_column=target_column,
+                            feature_importance=ag_results.get("feature_importance"),
+                            importance_threshold=0.0,  # tweak if you want stricter filtering
+                        )
+
+                    # 3) Optuna tuning on reduced features
+                    st.info("🎯 Finding the best hyperparameters...")
+                    with st.spinner("Finding the best hyperparameters..."):
+                        tuning_results = tune_model_with_optuna(
+                            df=reduced_df,
+                            target_column=target_column,
+                            model_family=ag_results["best_model_family"],
+                            problem_type=ag_results["problem_type"],
+                            eval_metric=ag_results["eval_metric"],
+                            n_trials=30,  # tweak as needed
+                        )
+
+                    # 4) Store summary in session_state
+                    st.session_state.modeling_results = {
+                        "problem_type": ag_results["problem_type"],
+                        "eval_metric": ag_results["eval_metric"],
+
+                        # AutoGluon results
+                        "auto_best_model_name": ag_results["best_model_name"],      # e.g. "LightGBM_BAG_L1"
+                        "auto_best_model_family": ag_results["best_model_family"],  # e.g. "lightgbm"
+
+                        # Features used after feature importance
+                        "selected_features": selected_features,
+
+                        # Optuna tuning results (implementation inside that family)
+                        "tuned_model_family": ag_results["best_model_family"],
+                        "tuned_model_class": tuning_results["best_model_class"],
+                        "tuned_params": tuning_results["best_params"],
+                    }
+
+
+                    st.success(
+                        "✅ Best model identified and hyperparameters tuned. "
+                        "You can now inspect the results below."
+                    )
+                    results = st.session_state.modeling_results
+
+            # If results exist, show them
+            if results is not None:
+                st.subheader("📌 Problem Setup")
+                st.write(f"- **Problem type:** `{results['problem_type']}`")
+                st.write(f"- **Evaluation metric:** `{results['eval_metric']}`")
+
+                st.subheader("🏆 Best Model")
+                st.write(f"- **Best model :** `{results['auto_best_model_family']}`")
+
+                st.subheader("✨ Optuna-tuned implementation (within that family)")
+                st.write(
+                    "- **Implementation class used for Optuna tuning:** "
+                    f"`{results['tuned_model_class']}` "                    
+                )
+                
+                st.subheader("🧬 Features Used After Importance Filtering")
+                st.write(f"- Number of features: **{len(results['selected_features'])}**")
+                st.write(f"- Features: `{', '.join(results['selected_features'])}`")
+
+                st.subheader("⚙️ Best Hyperparameters")
+                st.json(results["tuned_params"])
     else:
-        st.warning(
-            "⚠️ Please upload a dataset and select a target column on the Home page first."
-        )
+        st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
+
+
 
 
 else:
