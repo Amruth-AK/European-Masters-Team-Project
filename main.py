@@ -233,6 +233,7 @@ elif selected_page == "Model Suggestions":
                             problem_type=ag_results["problem_type"],
                             eval_metric=ag_results["eval_metric"],
                             n_trials=30,  # tweak as needed
+                            time_limit=120
                         )
 
                     # 4) Store summary in session_state
@@ -251,6 +252,10 @@ elif selected_page == "Model Suggestions":
                         "tuned_model_family": ag_results["best_model_family"],
                         "tuned_model_class": tuning_results["best_model_class"],
                         "tuned_params": tuning_results["best_params"],
+
+                        # Final trained model and eval score
+                        "final_model": tuning_results["best_model"],          # native model with best params
+                        "eval_score": tuning_results["best_eval_score"],      # RMSE / AUC / log_loss
                     }
 
 
@@ -260,27 +265,35 @@ elif selected_page == "Model Suggestions":
                     )
                     results = st.session_state.modeling_results
 
-            # If results exist, show them
+            # If results exist, show only the final summary
             if results is not None:
-                st.subheader("📌 Problem Setup")
-                st.write(f"- **Problem type:** `{results['problem_type']}`")
-                st.write(f"- **Evaluation metric:** `{results['eval_metric']}`")
+                st.subheader("🏁 Final Model")
 
-                st.subheader("🏆 Best Model")
-                st.write(f"- **Best model :** `{results['auto_best_model_family']}`")
-
-                st.subheader("✨ Optuna-tuned implementation (within that family)")
-                st.write(
-                    "- **Implementation class used for Optuna tuning:** "
-                    f"`{results['tuned_model_class']}` "                    
+                # Best model: prefer the full AutoGluon model name if available
+                best_model_label = (
+                    results.get("auto_best_model_name")
+                    or results.get("auto_best_model_family")
+                    or "Unknown model"
                 )
-                
-                st.subheader("🧬 Features Used After Importance Filtering")
-                st.write(f"- Number of features: **{len(results['selected_features'])}**")
-                st.write(f"- Features: `{', '.join(results['selected_features'])}`")
+                st.write(f"**Best Model:** `{best_model_label}`")
 
-                st.subheader("⚙️ Best Hyperparameters")
+                st.write("**Optimal Hyperparameters:**")
                 st.json(results["tuned_params"])
+
+                eval_metric = (results.get("eval_metric") or "").lower()
+                eval_score = results.get("eval_score", None)
+
+                if eval_score is not None:
+                    # Format based on metric type
+                    if eval_metric == "roc_auc":
+                        st.write(f"**Validation ROC AUC:** `{eval_score:.4f}`")
+                    elif eval_metric == "root_mean_squared_error":
+                        st.write(f"**Validation RMSE:** `{eval_score:.4f}`")
+                    elif eval_metric == "log_loss":
+                        st.write(f"**Validation log_loss:** `{eval_score:.4f}`")
+                    else:
+                        st.write(f"**Validation score:** `{eval_score:.4f}`")
+
     else:
         st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
 
