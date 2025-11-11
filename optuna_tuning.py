@@ -300,9 +300,11 @@ def tune_model_with_optuna(
 
         if is_reg:
             y_pred = model.predict(X_valid)
-            # RMSE
-            rmse = mean_squared_error(y_valid, y_pred, squared=False)
+            # Old sklearn doesn't support squared=False, so compute RMSE manually
+            mse = mean_squared_error(y_valid, y_pred)
+            rmse = np.sqrt(mse)
             return rmse
+
 
         # Classification: need probabilities
         if hasattr(model, "predict_proba"):

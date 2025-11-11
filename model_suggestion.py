@@ -1,6 +1,12 @@
 import pandas as pd
 from autogluon.tabular import TabularPredictor
 from typing import Dict, Any, Optional
+import tempfile
+import shutil
+import logging
+
+# Configure logging to suppress verbose AutoGluon output if desired
+logging.basicConfig(level=logging.WARNING)
 
 
 def _detect_problem_type(df: pd.DataFrame, target_column: str):
@@ -20,16 +26,21 @@ def _detect_problem_type(df: pd.DataFrame, target_column: str):
     if n_unique <= 1:
         raise ValueError("Target column must have at least 2 distinct values.")
 
-    is_numeric = pd.api.types.is_numeric_dtype(target)
+    # Convert to numeric if possible, but handle non-numeric gracefully
+    numeric_target = pd.to_numeric(target, errors='coerce')
+    is_numeric = pd.api.types.is_numeric_dtype(target) and not numeric_target.isna().all()
 
-    # Numeric with > 2 unique values → regression (continuous)
-    if is_numeric and n_unique > 2:
+
+    # Regression: More than a few unique numeric values
+    # Heuristic: if > 20 unique values, and it's a number, it's likely regression.
+    if is_numeric and n_unique > 20:
         return "regression", "root_mean_squared_error"
 
-    # Otherwise, treat as classification
+    # Classification (Binary or Multiclass)
     if n_unique == 2:
         return "binary", "roc_auc"
     else:
+        # Also handles numeric data with few unique values (e.g., 1, 2, 3, 4)
         return "multiclass", "log_loss"
 
 
@@ -65,11 +76,14 @@ def run_model_suggestions(
     df: pd.DataFrame,
     target_column: str,
     time_limit: Optional[int] = None,
-    presets: str = "high_quality",
+    presets: str = "medium_quality", # Use medium_quality for faster feedback
 ) -> Dict[str, Any]:
     """
     Train models with AutoGluon and return artifacts that can be used
     downstream (Optuna, feature selection, etc.), WITHOUT any Streamlit UI.
+
+    This version creates and cleans up a temporary directory to avoid
+    Windows PermissionError issues.
 
     Parameters
     ----------
@@ -85,22 +99,7 @@ def run_model_suggestions(
     Returns
     -------
     Dict[str, Any]
-        {
-            "problem_type": str,          # "regression" / "binary" / "multiclass"
-            "eval_metric": str,           # "root_mean_squared_error" / "roc_auc" / "log_loss"
-            "leaderboard": pd.DataFrame,  # full AutoGluon leaderboard
-            "best_model_name": str,       # AutoGluon internal model name (e.g. "LightGBM_BAG_L1")
-            "best_model_family": str,     # coarse family label for Optuna logic (e.g. "lightgbm")
-            "feature_importance": pd.DataFrame or None,  # importance values (may be None)
-            "predictor": TabularPredictor # fitted predictor object
-        }
-
-    Raises
-    ------
-    ValueError
-        If inputs are invalid (e.g., missing target column, too few target classes).
-    Exception
-        Any underlying AutoGluon error will propagate upward.
+        A dictionary containing analysis results.
     """
     if target_column not in df.columns:
         raise ValueError("Target column not found in the dataset.")
@@ -123,53 +122,86 @@ def run_model_suggestions(
     if time_limit is None:
         time_limit = 60  # seconds, adjust if you want
 
-    # Train AutoGluon predictor
-    predictor = TabularPredictor(
-        label=target_column,
-        problem_type=problem_type,
-        eval_metric=eval_metric,
-    ).fit(
-        train_data=df,
-        time_limit=time_limit,
-        presets=presets,
-    )
+    # --- SOLUTION IMPLEMENTED HERE ---
+    # Create a temporary directory for AutoGluon models to avoid permission issues.
+    model_path = tempfile.mkdtemp(prefix="ag_models_")
+    print(f"AutoGluon models will be saved to temporary directory: {model_path}")
 
-    # Get leaderboard
-        # Get leaderboard
-    leaderboard = predictor.leaderboard(silent=True)
-    if leaderboard is None or leaderboard.empty:
-        raise RuntimeError("No models were trained successfully; leaderboard is empty.")
-
-    # Prefer the best NON-ENSEMBLE model as the base model family
-    model_series = leaderboard["model"].astype(str)
-
-    non_ensemble_rows = leaderboard[
-        ~model_series.str.contains("weightedensemble", case=False, na=False)
-    ]
-
-    if not non_ensemble_rows.empty:
-        # Take the best base model (first non-ensemble row)
-        best_row = non_ensemble_rows.iloc[0]
-    else:
-        # Fallback: if for some reason we only have ensembles, use the top one
-        best_row = leaderboard.iloc[0]
-
-    best_model_name = str(best_row["model"])
-    best_model_family = _infer_model_family(best_model_name)
-
-
-    # Compute feature importance for downstream feature selection
     try:
-        fi_df = predictor.feature_importance(data=df)
-    except Exception:
-        fi_df = None
+        # Train AutoGluon predictor inside the temporary path
+        predictor = TabularPredictor(
+            label=target_column,
+            problem_type=problem_type,
+            eval_metric=eval_metric,
+            path=model_path, # Specify the output path
+        ).fit(
+            train_data=df,
+            time_limit=time_limit,
+            presets=presets,
+            # Disable dynamic stacking which can sometimes cause the permission error
+            # This is an extra precaution
+            dynamic_stacking=False,
+            # Suppress verbose output in the Streamlit app
+            verbosity=0
+        )
 
-    return {
-        "problem_type": problem_type,
-        "eval_metric": eval_metric,
-        "leaderboard": leaderboard,
-        "best_model_name": best_model_name,
-        "best_model_family": best_model_family,
-        "feature_importance": fi_df,
-        "predictor": predictor,
-    }
+        # Get leaderboard
+        leaderboard = predictor.leaderboard(silent=True)
+        
+        print("\nTop 5 Models by Validation Score:")
+        print(leaderboard.head(5)[['model', 'score_val']])
+
+        
+        if leaderboard is None or leaderboard.empty:
+            raise RuntimeError("No models were trained successfully; leaderboard is empty.")
+
+        # Prefer the best NON-ENSEMBLE model as the base model family
+        model_series = leaderboard["model"].astype(str)
+        non_ensemble_rows = leaderboard[
+            ~model_series.str.contains("weightedensemble", case=False, na=False) &
+            ~model_series.str.contains("stack", case=False, na=False)
+        ]
+
+        if not non_ensemble_rows.empty:
+            # Take the best base model (first non-ensemble row)
+            best_row = non_ensemble_rows.iloc[0]
+        else:
+            # Fallback: if only ensembles were trained, use the top one
+            best_row = leaderboard.iloc[0]
+
+        best_model_name = str(best_row["model"])
+        best_model_family = _infer_model_family(best_model_name)
+
+        # Compute feature importance for downstream feature selection
+        try:
+            fi_df = predictor.feature_importance(data=df)
+        except Exception as e:
+            print(f"Could not compute feature importance: {e}")
+            fi_df = None
+
+        # Prepare results before the directory is deleted
+        results = {
+            "problem_type": problem_type,
+            "eval_metric": eval_metric,
+            "leaderboard": leaderboard,
+            "best_model_name": best_model_name,
+            "best_model_family": best_model_family,
+            "feature_importance": fi_df,
+            "predictor_path": model_path, # Return path in case it needs to be accessed
+        }
+
+    except Exception as e:
+        # If anything goes wrong, still try to clean up
+        print(f"An error occurred during AutoGluon training: {e}")
+        raise # Re-raise the exception after printing
+
+    finally:
+        # --- IMPORTANT ---
+        # Reliably clean up the temporary directory and all its contents
+        print(f"Cleaning up temporary directory: {model_path}")
+        shutil.rmtree(model_path, ignore_errors=True)
+        # Note: The 'predictor' object is now invalid as its files are deleted.
+        # This function's purpose is to return METADATA, not a usable predictor.
+        results["predictor_path"] = None # Path is no longer valid
+
+    return results
