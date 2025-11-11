@@ -638,6 +638,7 @@ def suggest_feature_combination(analysis_results: dict, target_column: str = Non
     """
     Generates suggestions for creating new features by combining categorical columns.
     For each combination, it also suggests an appropriate encoding for the new feature.
+    Limits the number of suggested combinations to a maximum of 10.
     """
     suggestions = []
     categorical_info = analysis_results.get('categorical_info', {})
@@ -650,6 +651,11 @@ def suggest_feature_combination(analysis_results: dict, target_column: str = Non
 
     # Generate all unique pairs of categorical columns
     column_pairs = list(itertools.combinations(categorical_cols, 2))
+
+    # --- MODIFIED: Limit the number of combinations to 10 ---
+    # If more than 10 combinations are possible, take the first 10 to avoid excessive suggestions.
+    if len(column_pairs) > 10:
+        column_pairs = column_pairs[:10]
 
     for col1, col2 in column_pairs:
         new_col_name = f"{col1}_{col2}_combined"
@@ -680,6 +686,7 @@ def suggest_feature_combination(analysis_results: dict, target_column: str = Non
         })
 
     return suggestions
+
 
 def suggest_fastica_features(analysis_results: dict, target_column: str = None) -> list:
     """
