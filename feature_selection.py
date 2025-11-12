@@ -8,7 +8,7 @@ def select_features_by_importance(
     feature_importance: Optional[pd.DataFrame],
     importance_threshold: float = 0.0,
     top_k: Optional[int] = None,
-    cumulative_importance_threshold: float = 0.99,
+    cumulative_importance_threshold: float = 0.97,
     max_features: Optional[int] = None,
 ) -> Tuple[pd.DataFrame, List[str]]:
     """

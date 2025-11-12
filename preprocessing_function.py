@@ -1090,412 +1090,356 @@ def combine_categorical_features(df: pd.DataFrame,
 
     return df
 
-def grid_search_replace_ratio(
+import numpy as np
+import pandas as pd
+from typing import List
+from sklearn.decomposition import FastICA
+from sklearn.preprocessing import StandardScaler
+
+
+def apply_fastica(
     df: pd.DataFrame,
-    target_column: str,
-    model,
-    problem_type: str,
-    replace_ratios: List[float] = None,
     n_components: int = None,
+    target_column: str = None,
     exclude_columns: List[str] = None,
-    analysis_results: dict = None,
-    cv_folds: int = 5,
     random_state: int = 42,
-    **fastica_kwargs
+    max_iter: int = 1000,
+    whiten: str = 'unit-variance',
+    mode: str = 'hybrid',   # 'hybrid' is the default mode
+    replace_ratio: float = None,  # Automatically calculate the replace ratio
+    replace_columns: List[str] = None,
+    keep_columns: List[str] = None,
+    add_interaction_features: bool = False,  # Add ICA interaction features
+    analysis_results: dict = None  # Use analysis results to make intelligent decisions
 ) -> pd.DataFrame:
     """
-    Grid search to test different replace_ratio values for FastICA.
-    
-    This function provides a macro-level view by testing multiple replace_ratio values
-    and recording detailed information for each trial, including feature counts and
-    cross-validation scores.
-    
+    Apply FastICA with intelligent hybrid mode.
+
     Args:
         df: Input dataframe
-        target_column: Target column name
-        model: Model instance or model class (must support fit/predict)
-        problem_type: 'regression', 'binary', or 'multiclass'
-        replace_ratios: List of replace_ratio values to test. 
-                       If None, uses default range [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7]
-        n_components: Number of ICA components
-        exclude_columns: Columns to exclude from ICA
-        analysis_results: Analysis results dictionary
-        cv_folds: Number of cross-validation folds (default: 5)
-        random_state: Random seed
-        **fastica_kwargs: Additional arguments for apply_fastica
-        
-    Returns:
-        DataFrame with columns:
-            - replace_ratio: Tested replace_ratio value
-            - mean_score: Mean CV score
-            - std_score: Standard deviation of CV scores
-            - min_score: Minimum CV score
-            - max_score: Maximum CV score
-            - n_features_before: Number of features before FastICA
-            - n_features_after: Number of features after FastICA
-            - n_components: Number of ICA components used
-            - n_replaced: Number of features replaced
-            - n_kept: Number of features kept
-            - n_interactions: Number of interaction features added (if enabled)
-            - status: 'success' or 'error'
-            - error_message: Error message if status is 'error'
-    """
-    import numpy as np
-    
-    if replace_ratios is None:
-        replace_ratios = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7]
-    
-    df_work = df.copy()
-    if target_column not in df_work.columns:
-        raise ValueError(f"Target column '{target_column}' not found")
-    
-    pt = problem_type.lower()
-    is_reg = pt == "regression"
-    
-    # Setup cross-validation
-    if is_reg:
-        cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    else:
-        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    
-    y = df_work[target_column]
-    n_features_before = len(df_work.columns) - 1  # Exclude target
-    
-    results = []
-    
-    for replace_ratio in replace_ratios:
-        print(f"Testing replace_ratio = {replace_ratio:.2f}...")
-        
-        try:
-            # Apply FastICA
-            df_transformed = apply_fastica(
-                df_work,
-                n_components=n_components,
-                target_column=target_column,
-                exclude_columns=exclude_columns,
-                mode='hybrid',
-                replace_ratio=replace_ratio,
-                analysis_results=analysis_results,
-                random_state=random_state,
-                **fastica_kwargs
-            )
-            
-            # Prepare features and target
-            X = df_transformed.drop(columns=[target_column])
-            y_transformed = df_transformed[target_column]
-            
-            if X.empty or len(X.columns) == 0:
-                print(f"  ⚠️ Empty features, skipping")
-                results.append({
-                    "replace_ratio": replace_ratio,
-                    "mean_score": np.nan,
-                    "std_score": np.nan,
-                    "min_score": np.nan,
-                    "max_score": np.nan,
-                    "n_features_before": n_features_before,
-                    "n_features_after": 0,
-                    "n_components": n_components,
-                    "n_replaced": 0,
-                    "n_kept": 0,
-                    "n_interactions": 0,
-                    "status": "error",
-                    "error_message": "Empty features after transformation"
-                })
-                continue
-            
-            n_features_after = len(X.columns)
-            
-            # Count ICA components and interaction features
-            ica_cols = [col for col in X.columns if col.startswith('ICA_')]
-            interaction_cols = [col for col in X.columns if '_x_' in col and any(c.startswith('ICA_') for c in col.split('_x_'))]
-            n_ica_components = len(ica_cols)
-            n_interactions = len(interaction_cols)
-            
-            # Estimate n_replaced and n_kept (approximate)
-            original_numerical = df_work.select_dtypes(include=np.number).columns.tolist()
-            if target_column in original_numerical:
-                original_numerical.remove(target_column)
-            if exclude_columns:
-                original_numerical = [col for col in original_numerical if col not in exclude_columns]
-            
-            n_replaced = max(1, int(len(original_numerical) * replace_ratio))
-            n_kept = len(original_numerical) - n_replaced
-            
-            # Clone model
-            if hasattr(model, 'fit'):
-                model_clone = clone(model)
-            else:
-                model_clone = model.__class__(**model.get_params())
-            
-            # Cross-validation
-            if is_reg:
-                scores = -cross_val_score(
-                    model_clone, X, y_transformed, cv=cv,
-                    scoring='neg_root_mean_squared_error',
-                    n_jobs=-1
-                )
-            else:
-                if hasattr(model_clone, "predict_proba"):
-                    if pt == "binary":
-                        scores = cross_val_score(
-                            model_clone, X, y_transformed, cv=cv,
-                            scoring='roc_auc',
-                            n_jobs=-1
-                        )
-                        scores = 1.0 - scores  # Convert to minimize (lower is better)
-                    else:
-                        scores = cross_val_score(
-                            model_clone, X, y_transformed, cv=cv,
-                            scoring='neg_log_loss',
-                            n_jobs=-1
-                        )
-                        scores = -scores  # Convert to minimize
-                else:
-                    scores = cross_val_score(
-                        model_clone, X, y_transformed, cv=cv,
-                        scoring='accuracy',
-                        n_jobs=-1
-                    )
-                    scores = 1.0 - scores  # Convert to minimize
-            
-            results.append({
-                "replace_ratio": replace_ratio,
-                "mean_score": np.mean(scores),
-                "std_score": np.std(scores),
-                "min_score": np.min(scores),
-                "max_score": np.max(scores),
-                "n_features_before": n_features_before,
-                "n_features_after": n_features_after,
-                "n_components": n_ica_components,
-                "n_replaced": n_replaced,
-                "n_kept": n_kept,
-                "n_interactions": n_interactions,
-                "status": "success",
-                "error_message": None
-            })
-            print(f"  ✅ Mean score: {np.mean(scores):.4f} ± {np.std(scores):.4f} "
-                  f"(Features: {n_features_before} → {n_features_after})")
-            
-        except Exception as e:
-            print(f"  ❌ Error: {e}")
-            results.append({
-                "replace_ratio": replace_ratio,
-                "mean_score": np.nan,
-                "std_score": np.nan,
-                "min_score": np.nan,
-                "max_score": np.nan,
-                "n_features_before": n_features_before,
-                "n_features_after": np.nan,
-                "n_components": n_components,
-                "n_replaced": np.nan,
-                "n_kept": np.nan,
-                "n_interactions": np.nan,
-                "status": "error",
-                "error_message": str(e)
-            })
-            continue
-    
-    results_df = pd.DataFrame(results)
-    # Sort by mean_score (ascending for regression/log_loss, but for AUC we want descending)
-    # Since we converted AUC to (1-AUC) for minimization, ascending sort works for all
-    results_df = results_df.sort_values("mean_score", ascending=True, na_last=True)
-    
-    return results_df
+        n_components: Number of ICA components. If None, auto-selected.
+        target_column: Target column to exclude from ICA.
+        exclude_columns: Additional columns to exclude from ICA.
+        random_state: Random state for FastICA.
+        max_iter: Max iterations for FastICA.
+        whiten: Whether to whiten in FastICA.
+        mode: 'hybrid', 'add', 'replace', or 'selective'.
+        replace_ratio: For 'hybrid' mode. If None, auto-calculated.
+        replace_columns: For 'selective' mode: columns to replace.
+        keep_columns: For 'selective' mode: columns to keep.
+        add_interaction_features: If True, add ICA interaction features.
+        analysis_results: Optional analysis dict for intelligent feature selection.
 
-
-def tune_fastica_replace_ratio(
-    df: pd.DataFrame,
-    target_column: str,
-    model,
-    problem_type: str,
-    eval_metric: str = None,
-    n_components: int = None,
-    exclude_columns: List[str] = None,
-    analysis_results: dict = None,
-    n_trials: int = 20,
-    cv_folds: int = 5,
-    random_state: int = 42,
-    **fastica_kwargs
-) -> dict:
-    """
-    Use Optuna to automatically search for optimal replace_ratio.
-    
-    This function provides micro-level fine-tuning by using Optuna's optimization
-    to find the best replace_ratio value within a continuous range. It uses
-    cross-validation to avoid overfitting and records detailed information for
-    each trial.
-    
-    Args:
-        df: Input dataframe
-        target_column: Target column name
-        model: Model instance or model class (must support fit/predict)
-        problem_type: 'regression', 'binary', or 'multiclass'
-        eval_metric: Evaluation metric name. If None, auto-selected:
-                    'rmse' for regression, 'roc_auc' for binary, 'log_loss' for multiclass
-        n_components: Number of ICA components
-        exclude_columns: Columns to exclude from ICA
-        analysis_results: Analysis results dictionary
-        n_trials: Number of Optuna trials (default: 20)
-        cv_folds: Number of cross-validation folds (default: 5)
-        random_state: Random seed
-        **fastica_kwargs: Additional arguments for apply_fastica
-        
     Returns:
-        dict with keys:
-            - best_replace_ratio: Optimal replace_ratio value
-            - best_score: Best CV score achieved
-            - study: Optuna study object
-            - results_df: DataFrame with all trial results including:
-                * replace_ratio: Tested value
-                * score: CV score for this trial
-                * n_features_before: Features before transformation
-                * n_features_after: Features after transformation
-                * n_components: ICA components used
-                * n_replaced: Features replaced
-                * n_kept: Features kept
-                * n_interactions: Interaction features added
-                * state: Trial state (COMPLETE, PRUNED, etc.)
+        Transformed DataFrame.
     """
-    import numpy as np
-    
-    # Prepare data
-    df_work = df.copy()
-    if target_column not in df_work.columns:
-        raise ValueError(f"Target column '{target_column}' not found")
-    
-    # Determine evaluation metric
-    pt = problem_type.lower()
-    is_reg = pt == "regression"
-    
-    if eval_metric is None:
-        eval_metric = "rmse" if is_reg else "roc_auc" if pt == "binary" else "log_loss"
-    
-    # Setup cross-validation
-    if is_reg:
-        cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    else:
-        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    
-    y = df_work[target_column]
-    n_features_before = len(df_work.columns) - 1  # Exclude target
-    
-    # Get original numerical columns for estimation
-    original_numerical = df_work.select_dtypes(include=np.number).columns.tolist()
-    if target_column in original_numerical:
-        original_numerical.remove(target_column)
+    df = df.copy()
+
+    # 1. Select numerical columns
+    numerical_cols = df.select_dtypes(include=np.number).columns.tolist()
+
+    # 2. Exclude target and specified columns
     if exclude_columns:
-        original_numerical = [col for col in original_numerical if col not in exclude_columns]
+        numerical_cols = [col for col in numerical_cols if col not in exclude_columns]
+    if target_column and target_column in numerical_cols:
+        numerical_cols.remove(target_column)
+
+    if len(numerical_cols) < 2:
+        print("⚠️ Need at least 2 numerical columns for FastICA")
+        return df
+
+    # 3. Auto-select n_components if not specified
+    if n_components is None:
+        n_components = min(len(numerical_cols), len(df) // 2, 10)
+        n_components = max(2, n_components)
+
+    if n_components >= len(numerical_cols):
+        print(f"⚠️ n_components ({n_components}) >= n_features ({len(numerical_cols)}). "
+              f"Using {len(numerical_cols) - 1}")
+        n_components = len(numerical_cols) - 1
+
+    # 4. Prepare data
+    X = df[numerical_cols].copy()
+    if X.isnull().any().any():
+        print("⚠️ Missing values detected. Filling with median.")
+        X = X.fillna(X.median())
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
     
-    def objective(trial: optuna.Trial) -> float:
-        # Suggest replace_ratio value
-        replace_ratio = trial.suggest_float("replace_ratio", 0.1, 0.7, step=0.05)
-        
-        # Apply FastICA
-        try:
-            df_transformed = apply_fastica(
-                df_work,
-                n_components=n_components,
-                target_column=target_column,
-                exclude_columns=exclude_columns,
-                mode='hybrid',
-                replace_ratio=replace_ratio,
-                analysis_results=analysis_results,
-                random_state=random_state,
-                **fastica_kwargs
+    if isinstance(whiten, bool):
+        if whiten:  # True → pick a valid string
+            whiten_param = "unit-variance"
+        else:
+            whiten_param = False
+    else:
+        # assume user passed a valid string or False
+        whiten_param = whiten
+
+    # 5. Apply FastICA
+    try:
+        ica = FastICA(
+            n_components=n_components,
+            random_state=random_state,
+            max_iter=max_iter,
+            whiten=whiten_param
+        )
+        ica_components = ica.fit_transform(X_scaled)
+    except Exception as e:
+        print(f"❌ FastICA failed: {e}")
+        return df
+
+    component_names = [f'ICA_{i}' for i in range(n_components)]
+    ica_df = pd.DataFrame(
+        ica_components,
+        columns=component_names,
+        index=df.index
+    )
+
+    # Placeholder for final result
+    df_result = df.copy()
+
+    # 6. Handle different modes
+    if mode == 'hybrid':
+        # Intelligent calculation of replace ratio
+        if replace_ratio is None:
+            replace_ratio = _calculate_intelligent_replace_ratio(
+                df, numerical_cols, n_components, analysis_results
             )
-        except Exception as e:
-            print(f"⚠️ FastICA failed with replace_ratio={replace_ratio:.3f}: {e}")
-            return float('inf') if is_reg or eval_metric == "log_loss" else 0.0
-        
-        # Prepare features and target
-        X = df_transformed.drop(columns=[target_column])
-        y_transformed = df_transformed[target_column]
-        
-        # Check data validity
-        if X.empty or len(X.columns) == 0:
-            return float('inf') if is_reg or eval_metric == "log_loss" else 0.0
-        
-        # Count features
-        ica_cols = [col for col in X.columns if col.startswith('ICA_')]
-        interaction_cols = [col for col in X.columns if '_x_' in col and any(c.startswith('ICA_') for c in col.split('_x_'))]
-        n_ica_components = len(ica_cols)
-        n_interactions = len(interaction_cols)
-        n_features_after = len(X.columns)
-        n_replaced = max(1, int(len(original_numerical) * replace_ratio))
-        n_kept = len(original_numerical) - n_replaced
-        
-        # Store trial metadata
-        trial.set_user_attr("n_features_before", n_features_before)
-        trial.set_user_attr("n_features_after", n_features_after)
-        trial.set_user_attr("n_components", n_ica_components)
-        trial.set_user_attr("n_replaced", n_replaced)
-        trial.set_user_attr("n_kept", n_kept)
-        trial.set_user_attr("n_interactions", n_interactions)
-        
-        # Cross-validation
-        scores = []
-        for train_idx, val_idx in cv.split(X, y_transformed):
-            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-            y_train, y_val = y_transformed.iloc[train_idx], y_transformed.iloc[val_idx]
-            
-            # Clone model
-            if hasattr(model, 'fit'):
-                model_clone = clone(model)
-            else:
-                model_clone = model.__class__(**model.get_params())
-            
-            model_clone.fit(X_train, y_train)
-            
-            # Predict
-            if is_reg:
-                y_pred = model_clone.predict(X_val)
-                if eval_metric == "rmse":
-                    score = np.sqrt(mean_squared_error(y_val, y_pred))
-                else:
-                    score = mean_squared_error(y_val, y_pred)
-            else:
-                if hasattr(model_clone, "predict_proba"):
-                    y_proba = model_clone.predict_proba(X_val)
-                    if eval_metric == "roc_auc" and pt == "binary":
-                        score = roc_auc_score(y_val, y_proba[:, 1])
-                        score = 1.0 - score  # Optuna minimizes
-                    else:
-                        score = log_loss(y_val, y_proba)
-                else:
-                    y_pred = model_clone.predict(X_val)
-                    score = log_loss(y_val, y_pred)
-            
-            scores.append(score)
-        
-        return np.mean(scores)
-    
-    # Run Optuna optimization
-    study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-    
-    # Extract results
-    best_replace_ratio = study.best_params["replace_ratio"]
-    best_score = study.best_value
-    
-    # Create results DataFrame with all trial information
-    results_data = []
-    for trial in study.trials:
-        results_data.append({
-            "replace_ratio": trial.params.get("replace_ratio", np.nan),
-            "score": trial.value,
-            "n_features_before": trial.user_attrs.get("n_features_before", np.nan),
-            "n_features_after": trial.user_attrs.get("n_features_after", np.nan),
-            "n_components": trial.user_attrs.get("n_components", np.nan),
-            "n_replaced": trial.user_attrs.get("n_replaced", np.nan),
-            "n_kept": trial.user_attrs.get("n_kept", np.nan),
-            "n_interactions": trial.user_attrs.get("n_interactions", np.nan),
-            "state": trial.state.name
-        })
-    results_df = pd.DataFrame(results_data)
-    
-    return {
-        "best_replace_ratio": best_replace_ratio,
-        "best_score": best_score,
-        "study": study,
-        "results_df": results_df
-    }
+
+        # How many features to replace
+        n_to_replace = max(1, int(len(numerical_cols) * replace_ratio))
+        n_to_replace = min(n_to_replace, len(numerical_cols) - 1)  # Keep at least 1
+
+        # Intelligent selection of features to replace/keep
+        cols_to_replace, cols_to_keep = _select_features_to_replace(
+            df, numerical_cols, n_to_replace, analysis_results
+        )
+
+        non_numerical_cols = [col for col in df.columns if col not in numerical_cols]
+
+        result_parts = []
+        if non_numerical_cols:
+            result_parts.append(df[non_numerical_cols])
+        if cols_to_keep:
+            result_parts.append(df[cols_to_keep])
+        result_parts.append(ica_df)
+
+        df_result = pd.concat(result_parts, axis=1)
+
+        print(f"✅ FastICA (Intelligent Hybrid Mode):")
+        print(f"   Replace ratio: {replace_ratio:.2%} (auto-calculated)")
+        print(f"   Replaced {len(cols_to_replace)} features, kept {len(cols_to_keep)}, "
+              f"added {n_components} ICA components")
+        print(f"   Total features: {len(df.columns)} → {len(df_result.columns)}")
+        if len(cols_to_replace) <= 10:
+            print(f"   Replaced: {cols_to_replace}")
+        else:
+            print(f"   Replaced: {cols_to_replace[:5]} ... ({len(cols_to_replace)} total)")
+        if len(cols_to_keep) <= 10:
+            print(f"   Kept: {cols_to_keep}")
+        else:
+            print(f"   Kept: {cols_to_keep[:5]} ... ({len(cols_to_keep)} total)")
+
+    elif mode == 'add':
+        # Feature engineering: Add ICA, keep all original
+        df_result = pd.concat([df, ica_df], axis=1)
+        print(f"✅ FastICA (Add Mode): Added {n_components} ICA components to "
+              f"{len(numerical_cols)} original features")
+        print(f"   Total features: {len(df.columns)} → {len(df_result.columns)}")
+
+    elif mode == 'replace':
+        # Dimensionality reduction: Replace numerical with ICA
+        non_numerical_cols = [col for col in df.columns if col not in numerical_cols]
+        if non_numerical_cols:
+            df_result = pd.concat([df[non_numerical_cols], ica_df], axis=1)
+        else:
+            df_result = ica_df
+        print(f"✅ FastICA (Replace Mode): Reduced {len(numerical_cols)} numerical "
+              f"features to {n_components} ICA components")
+        print(f"   Total features: {len(df.columns)} → {len(df_result.columns)}")
+
+    elif mode == 'selective':
+        # Selective: User specifies which to replace/keep
+        if replace_columns is None:
+            replace_columns = []
+        if keep_columns is None:
+            keep_columns = []
+
+        # Validate
+        replace_columns = [col for col in replace_columns if col in numerical_cols]
+        keep_columns = [col for col in keep_columns if col in numerical_cols]
+
+        # If both empty, default to replace all numerical
+        if not replace_columns and not keep_columns:
+            replace_columns = numerical_cols
+
+        # Ensure no overlap
+        keep_columns = [col for col in keep_columns if col not in replace_columns]
+
+        # Keep non-numerical columns
+        non_numerical_cols = [col for col in df.columns if col not in numerical_cols]
+
+        # Build result
+        result_parts = []
+        if non_numerical_cols:
+            result_parts.append(df[non_numerical_cols])
+        if keep_columns:
+            result_parts.append(df[keep_columns])
+        result_parts.append(ica_df)
+
+        df_result = pd.concat(result_parts, axis=1)
+
+        print(f"✅ FastICA (Selective Mode): Replaced {len(replace_columns)} features, "
+              f"kept {len(keep_columns)}, added {n_components} ICA components")
+        if replace_columns:
+            print(f"   Replaced: {replace_columns}")
+        if keep_columns:
+            print(f"   Kept: {keep_columns}")
+
+    else:
+        raise ValueError(f"Unknown mode: {mode}. Use 'add', 'replace', 'hybrid', or 'selective'")
+
+    # 7. Optional: Add interaction features from ICA components
+    if add_interaction_features:
+        interaction_features = _create_ica_interactions(
+            ica_df,
+            n_interactions=min(5, n_components)
+        )
+        if not interaction_features.empty:
+            df_result = pd.concat([df_result, interaction_features], axis=1)
+            print(f"   Added {len(interaction_features.columns)} ICA interaction features")
+
+    return df_result
+
+def _calculate_intelligent_replace_ratio(
+    df: pd.DataFrame,
+    numerical_cols: List[str],
+    n_components: int,
+    analysis_results: dict = None,
+    min_ratio: float = 0.1,
+    max_ratio: float = 0.7,
+) -> float:
+    """
+    Heuristic: how aggressively to replace original numeric features with ICA components.
+
+    - Base ratio depends on n_components / n_features
+    - If correlations are very dense, increase the ratio a bit
+    """
+    n_features = max(1, len(numerical_cols))
+    # Base: proportional to dimensionality reduction strength
+    base_ratio = n_components / n_features + 0.1
+    base_ratio = max(min_ratio, min(max_ratio, base_ratio))
+
+    # If we have correlation info, adjust based on redundancy
+    if analysis_results:
+        corr_info = analysis_results.get("correlations", {})
+        corr_matrix_dict = corr_info.get("correlation_matrix")
+        if corr_matrix_dict:
+            try:
+                corr_df = pd.DataFrame(corr_matrix_dict)
+                # Restrict to current numerical columns
+                corr_df = corr_df.loc[numerical_cols, numerical_cols]
+
+                # Ignore diagonal, look at proportion of |corr| > 0.7
+                mask = ~np.eye(len(corr_df), dtype=bool)
+                high_corr = (corr_df.abs()[mask] > 0.7).mean()
+
+                # high_corr is a fraction between 0 and 1
+                if high_corr > 0.5:
+                    base_ratio += 0.15  # very redundant
+                elif high_corr > 0.2:
+                    base_ratio += 0.05  # moderately redundant
+            except Exception:
+                # Fail silently and just use base_ratio
+                pass
+
+    return float(max(min_ratio, min(max_ratio, base_ratio)))
+
+
+def _select_features_to_replace(
+    df: pd.DataFrame,
+    numerical_cols: List[str],
+    n_to_replace: int,
+    analysis_results: dict = None
+) -> (List[str], List[str]):
+    """
+    Decide which numerical features to replace with ICA components.
+
+    Heuristic:
+    - If we have correlation with target, treat low-importance features as candidates
+      (low |corr(target, feature)| → more likely to replace).
+    - Otherwise, fallback to variance-based ranking (low variance → more replaceable).
+    """
+    n_to_replace = max(0, min(len(numerical_cols), n_to_replace))
+    if n_to_replace == 0:
+        return [], numerical_cols
+
+    scores = {col: 0.0 for col in numerical_cols}
+
+    # 1) If we have target correlations, use them as importance scores
+    if analysis_results:
+        corr_info = analysis_results.get("correlations", {})
+        target_corr = corr_info.get("target_correlation")
+        if isinstance(target_corr, dict):
+            for col in numerical_cols:
+                val = target_corr.get(col)
+                if isinstance(val, (int, float)) and not pd.isna(val):
+                    scores[col] = abs(val)  # higher = more important
+
+    # 2) If all scores are zero, fallback to variance
+    if all((v == 0 or pd.isna(v)) for v in scores.values()):
+        for col in numerical_cols:
+            try:
+                scores[col] = df[col].var()
+            except Exception:
+                scores[col] = 0.0
+
+    # 3) Sort ascending by importance → lowest scores are replaced first
+    ordered_cols = sorted(numerical_cols, key=lambda c: (scores.get(c, 0.0), c))
+
+    cols_to_replace = ordered_cols[:n_to_replace]
+    cols_to_keep = [c for c in numerical_cols if c not in cols_to_replace]
+
+    # Safety: always keep at least 1 feature
+    if not cols_to_keep and numerical_cols:
+        cols_to_keep = [ordered_cols[-1]]
+        cols_to_replace = [c for c in numerical_cols if c not in cols_to_keep]
+
+    return cols_to_replace, cols_to_keep
+
+
+def _create_ica_interactions(ica_df: pd.DataFrame, n_interactions: int = 5) -> pd.DataFrame:
+    """
+    Create interaction features from ICA components (e.g., ICA_0 * ICA_1, ICA_0^2).
+
+    Args:
+        ica_df: DataFrame of ICA components (columns: ICA_0, ICA_1, ...)
+        n_interactions: Maximum number of interaction features to create.
+
+    Returns:
+        DataFrame with interaction features.
+    """
+    interactions = []
+    interaction_names = []
+
+    ica_cols = ica_df.columns.tolist()
+
+    # Product interactions (ICA_i * ICA_j)
+    for i in range(min(len(ica_cols), n_interactions)):
+        for j in range(i + 1, min(len(ica_cols), n_interactions)):
+            if len(interactions) >= n_interactions:
+                break
+            interactions.append(ica_df[ica_cols[i]] * ica_df[ica_cols[j]])
+            interaction_names.append(f'{ica_cols[i]}_x_{ica_cols[j]}')
+        if len(interactions) >= n_interactions:
+            break
+
+    if interactions:
+        interaction_df = pd.DataFrame(
+            dict(zip(interaction_names, interactions)),
+            index=ica_df.index
+        )
+        return interaction_df
+
+    return pd.DataFrame(index=ica_df.index)
