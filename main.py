@@ -8,6 +8,7 @@ from pre_dashboard import run_preprocessing_dashboard
 from model_suggestion import run_model_suggestions
 from feature_selection import select_features_by_importance
 from optuna_tuning import tune_model_with_optuna
+from typing import List
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -32,69 +33,116 @@ if 'pre_df' not in st.session_state:
 if 'modeling_results' not in st.session_state:
     st.session_state.modeling_results = None
 
+
+# --- NEW: Validation Helper Function ---
+def get_plausible_conversion_types(series: pd.Series) -> List[str]:
+    """
+    Determines which data type conversions are plausible for a given column.
+    This prevents users from making obviously incorrect type changes in the UI.
+    """
+    plausible_types = []
+    current_dtype = str(series.dtype)
+    
+    # All columns can always be treated as Categorical
+    plausible_types.append("Categorical")
+
+    # --- Check for Numerical Plausibility ---
+    # Attempt to convert to numeric, coercing errors.
+    numeric_series = pd.to_numeric(series, errors='coerce')
+    # If less than 25% of the values are lost, consider it a plausible conversion.
+    if numeric_series.notna().sum() / series.notna().sum() > 0.75:
+        plausible_types.append("Numerical")
+
+    # --- Check for Datetime Plausibility ---
+    # Avoid converting pure numbers unless they look like valid timestamps (large numbers)
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        # Heuristic: if the median value is a huge number, it might be a Unix timestamp.
+        # Otherwise, small numbers like 1, 2, 3 are unlikely to be dates.
+        if series.median() > 1_000_000_000: # A reasonable cutoff for recent timestamps
+             plausible_types.append("Datetime")
+    else:
+        # For object types, try converting to datetime
+        try:
+            datetime_series = pd.to_datetime(series, errors='coerce')
+            if datetime_series.notna().sum() / series.notna().sum() > 0.75:
+                plausible_types.append("Datetime")
+        except (ValueError, TypeError):
+            pass
+
+    return list(set(plausible_types))
+
+
 # --- Home Page ---
 def display_home_page():
     """Defines the content of the Home page."""
     st.title("🚀 Interactive Data Analysis Tool")
     st.write("Upload your dataset to begin a comprehensive analysis and model evaluation.")
 
-    # File Uploader
-    uploaded_file = st.file_uploader(
-        "📂 Upload your CSV file",
-        type=["csv"],
-        key="file_uploader"
-    )
+    uploaded_file = st.file_uploader("📂 Upload your CSV file", type=["csv"], key="file_uploader")
 
     if uploaded_file is not None:
         try:
             st.session_state.df = pd.read_csv(uploaded_file)
-            # Reset dependent states on new file upload
-            st.session_state.analysis_results = None
-            st.session_state.pre_status = None
-            st.session_state.pre_df = None
-            st.session_state.id_columns_to_ignore = None 
+            # Reset all dependent states
+            keys_to_reset = ['analysis_results', 'pre_status', 'pre_df', 'id_columns_to_ignore', 'modeling_results', 'target_column']
+            for key in keys_to_reset:
+                st.session_state[key] = None
             st.success("✅ File uploaded successfully!")
         except Exception as e:
             st.error(f"❌ Error reading file: {e}")
             st.session_state.df = None
 
-    # Show Data Preview
     if st.session_state.df is not None:
         st.dataframe(st.session_state.df.head(), use_container_width=True)
         
-        # --- Data Type Override Section ---
         with st.expander("🔧 Manually Adjust Column Data Types", expanded=False):
-            st.info("Here you can override the data types inferred by the system. For example, a numerical ID column can be correctly set as 'Categorical'.")
-            
-            # (code for this section is unchanged)
+            st.info("The system automatically limits conversion options to prevent errors (e.g., you cannot convert a text column to numbers).")
+
+            # --- UPDATED: Simplified data type options ---
             dtype_options = {
                 "Numerical": "float64",
                 "Categorical": "category",
                 "Datetime": "datetime64[ns]",
-                "Object (Text)": "object"
             }
-            options_list = list(dtype_options.keys())
+            full_options_list = list(dtype_options.keys())
             modified_df = st.session_state.df.copy()
             cols_per_row = 3
             ui_cols = st.columns(cols_per_row)
+
             for i, col_name in enumerate(modified_df.columns):
                 with ui_cols[i % cols_per_row]:
-                    inferred_dtype = str(modified_df[col_name].dtype)
+                    inferred_dtype_str = str(modified_df[col_name].dtype)
+                    
+                    # Determine current user-friendly type
+                    if 'int' in inferred_dtype_str or 'float' in inferred_dtype_str:
+                        current_type_str = "Numerical"
+                    elif 'datetime' in inferred_dtype_str:
+                        current_type_str = "Datetime"
+                    else:
+                        current_type_str = "Categorical"
+
+                    # --- UPDATED: Get only plausible options for this column ---
+                    plausible_options = get_plausible_conversion_types(modified_df[col_name])
+                    
+                    # Ensure the current type is always an option
+                    if current_type_str not in plausible_options:
+                        plausible_options.insert(0, current_type_str)
+
                     try:
-                        default_index = options_list.index(next(key for key, val in dtype_options.items() if val in inferred_dtype))
-                    except (StopIteration, ValueError):
-                        if 'int' in inferred_dtype or 'float' in inferred_dtype:
-                             default_index = options_list.index("Numerical")
-                        else:
-                             default_index = options_list.index("Object (Text)")
+                        default_index = plausible_options.index(current_type_str)
+                    except ValueError:
+                        default_index = 0
+                    
+                    # Create the selectbox with the filtered list of options
                     selected_type_str = st.selectbox(
-                        label=f"**{col_name}** (Inferred: *{inferred_dtype}*)",
-                        options=options_list,
+                        label=f"**{col_name}** (Inferred: *{current_type_str}*)",
+                        options=plausible_options,
                         index=default_index,
                         key=f"dtype_override_{col_name}"
                     )
+
                     new_dtype = dtype_options[selected_type_str]
-                    if new_dtype != inferred_dtype:
+                    if new_dtype != inferred_dtype_str:
                         try:
                             if new_dtype == 'datetime64[ns]':
                                 modified_df[col_name] = pd.to_datetime(modified_df[col_name])
@@ -103,18 +151,16 @@ def display_home_page():
                         except Exception as e:
                             st.error(f"Failed to convert '{col_name}' to {selected_type_str}. Reverting. Error: {e}")
                             modified_df[col_name] = st.session_state.df[col_name]
-            st.session_state.df = modified_df
-        
-        # --- Identifier Column Selection Section ---
-        st.subheader("⚙️ Configure Identifier Columns")
-        st.info("The system automatically detects columns that look like identifiers (e.g., 'user_id'). These columns will be ignored during statistical analysis and duplicate row checks. You can review and adjust the selection below.")
 
-        # Auto-detect IDs if not already done for this dataframe instance
+            st.session_state.df = modified_df
+
+        # --- Identifier Column Selection ---
+        st.subheader("⚙️ Configure Identifier Columns")
+        # ... (This section remains unchanged)
+        st.info("The system automatically detects columns that look like identifiers (e.g., 'user_id'). These columns will be ignored during statistical analysis and duplicate row checks. You can review and adjust the selection below.")
         if st.session_state.id_columns_to_ignore is None:
             detected_ids = auto_detect_id_columns(st.session_state.df, st.session_state.target_column)
             st.session_state.id_columns_to_ignore = detected_ids
-
-        # Create the multiselect widget for user override
         selected_id_cols = st.multiselect(
             label="Select the column(s) to treat as identifiers:",
             options=st.session_state.df.columns.tolist(),
@@ -122,7 +168,7 @@ def display_home_page():
             help="These columns will be excluded from numerical analysis, correlations, and duplicate row detection."
         )
         st.session_state.id_columns_to_ignore = selected_id_cols
-        
+
         # --- Target Column Selection ---
         st.session_state.target_column = st.selectbox(
             "🎯 Select the target column for analysis (e.g., prediction target)",
@@ -131,10 +177,8 @@ def display_home_page():
 
         col1, col2 = st.columns([1, 1])
 
-        # Analyze Button
         if col1.button("📊 Run Data Analysis", use_container_width=True):
             with st.spinner("Running comprehensive analysis... This may take a moment."):
-                # FIXED: Pass the user-selected ID columns to the analyzer
                 analyzer_instance = DataAnalyzer(
                     df=st.session_state.df,
                     target_column=st.session_state.target_column,
@@ -143,14 +187,11 @@ def display_home_page():
                 st.session_state.analysis_results = analyzer_instance.run_full_analysis()
             st.success("✅ Analysis complete! Use the sidebar to explore results.")
 
-        # Remove Dataset Button
         if col2.button("🗑️ Clear Dataset", use_container_width=True):
-            # FIXED: Clear the new session state key as well
             keys_to_clear = ['df', 'analysis_results', 'target_column', 'pre_status', 'pre_df', 'modeling_results', 'id_columns_to_ignore']
             for key in keys_to_clear:
                 st.session_state[key] = None
             st.rerun()
-
 # --- (The rest of the file remains unchanged) ---
 
 # --- Sidebar Navigation ---
