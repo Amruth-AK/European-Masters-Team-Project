@@ -1,3 +1,5 @@
+# pre_dashboard.py
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -72,12 +74,16 @@ def apply_suggestion(df, suggestion, analysis_results=None):
     # Inject analysis_results for correlation-based feature creation if not already present
     if func_name == 'create_features_from_correlation_analysis' and analysis_results is not None:
         kwargs.setdefault('analysis_results', analysis_results)
+    
+    # --- NEW: Ensure analysis_results is available for outlier clipping on new data ---
+    if func_name == 'clip_outliers_iqr' and analysis_results is not None:
+        kwargs.setdefault('analysis_results', analysis_results)
 
     if func:
         try:
             return func(df, **kwargs)
         except Exception as e:
-            st.error(f"⚠️ Error applying {func_name} to {suggestion['feature']}: {e}")
+            st.error(f"⚠️ Error applying {func_name} to {suggestion.get('feature', 'N/A')}: {e}")
     return df
 
 
@@ -89,8 +95,10 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
     if 'pre_df' not in st.session_state or st.session_state.pre_df is None:
         st.session_state.pre_df = df.copy()
     if 'pre_status' not in st.session_state:
-        st.session_state.pre_status = None  
-    df = st.session_state.pre_df
+        st.session_state.pre_status = None
+    
+    # Use the preprocessed df if it exists, otherwise use the original
+    current_df = st.session_state.pre_df
 
     target_column = st.session_state.target_column
 
@@ -110,8 +118,10 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
 
     if not valid_steps:
         st.success("No preprocessing suggestions found — your dataset looks clean!")
-        st.dataframe(df.head(), width='stretch')
-        return df
+        st.dataframe(current_df.head())
+        # --- NEW: Even if no steps, set status so modeling can proceed ---
+        st.session_state.pre_status = "applied" 
+        return current_df
 
     for step_name, suggestions in valid_steps:
         with st.expander(f"🔹 {step_name}", expanded=True):
@@ -121,21 +131,34 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
                 st.warning(f"**Suggestion:** {sug['suggestion']}")
             st.divider()
 
-    # Buttons 
+    # Buttons
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
-        apply_all = col1.button("Apply All Suggestions", key="apply_all_btn", width='stretch')
-        ignore_all = col2.button("Ignore All Suggestions", key="ignore_all_btn", width='stretch')
+        apply_all = col1.button("Apply All Suggestions", key="apply_all_btn")
+        ignore_all = col2.button("Ignore All Suggestions", key="ignore_all_btn")
 
         if apply_all:
+            # --- MODIFIED: Capture the pipeline before applying it ---
+            pipeline_to_save = []
             for _, suggestions in valid_steps:
                 for sug in suggestions:
-                    df = apply_suggestion(df, sug, analysis_results=analysis_results)
-            st.session_state.pre_df = df
+                    pipeline_to_save.append(sug)
+            
+            st.session_state.transformation_pipeline = pipeline_to_save
+            
+            # Now, apply the steps to the current dataframe
+            processed_df = current_df.copy()
+            with st.spinner("Applying preprocessing steps..."):
+                for step in pipeline_to_save:
+                    processed_df = apply_suggestion(processed_df, step, analysis_results=analysis_results)
+            
+            st.session_state.pre_df = processed_df
             st.session_state.pre_status = "applied"
-            st.rerun()  
+            st.rerun()
 
         elif ignore_all:
+            # --- NEW: If ignored, save an empty pipeline ---
+            st.session_state.transformation_pipeline = []
             st.session_state.pre_status = "ignored"
             st.rerun()
 
@@ -145,8 +168,6 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         st.info("All preprocessing suggestions were ignored.")
 
     st.subheader("📊 Final Preprocessed Dataset Preview")
-    st.dataframe(df.head(), width='stretch')
+    st.dataframe(st.session_state.pre_df.head())
 
-    return df
-
-
+    return st.session_state.pre_df
