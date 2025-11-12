@@ -8,6 +8,40 @@ import logging
 # Configure logging to suppress verbose AutoGluon output if desired
 logging.basicConfig(level=logging.WARNING)
 
+# --- add near the top (after imports) ---
+def _extract_model_hyperparams(ag_model) -> dict:
+    """
+    Try to robustly fetch trained hyperparameters from an AutoGluon model wrapper.
+    We try several common attributes in order of likelihood.
+    """
+    # 1) Many AG models expose params_trained
+    for attr in ["params_trained", "params_fit", "params"]:
+        d = getattr(ag_model, attr, None)
+        if isinstance(d, dict) and d:
+            return d
+
+    # 2) Underlying framework model
+    core = getattr(ag_model, "model", None)
+    if core is not None:
+        # LightGBM/XGBoost/CatBoost/scikit
+        getp = getattr(core, "get_params", None)
+        if callable(getp):
+            try:
+                return dict(getp())
+            except Exception:
+                pass
+
+        # CatBoost often keeps .get_all_params()
+        getall = getattr(core, "get_all_params", None)
+        if callable(getall):
+            try:
+                return dict(getall())
+            except Exception:
+                pass
+
+    # 3) Fallback: nothing found
+    return {}
+
 
 def _detect_problem_type(df: pd.DataFrame, target_column: str):
     """
@@ -171,6 +205,16 @@ def run_model_suggestions(
 
         best_model_name = str(best_row["model"])
         best_model_family = _infer_model_family(best_model_name)
+        
+                # Load the best base model and extract its trained hyperparameters
+        try:
+            best_ag_model = predictor._trainer.load_model(best_model_name)
+            best_model_params = _extract_model_hyperparams(best_ag_model)
+        except Exception as e:
+            print(f"Could not load best model '{best_model_name}' to fetch params: {e}")
+            best_model_params = {}
+
+        best_val_score = float(best_row.get("score_val"))
 
         # Compute feature importance for downstream feature selection
         try:
@@ -187,7 +231,9 @@ def run_model_suggestions(
             "best_model_name": best_model_name,
             "best_model_family": best_model_family,
             "feature_importance": fi_df,
-            "predictor_path": model_path, # Return path in case it needs to be accessed
+            "predictor_path": model_path,
+            "best_val_score": best_val_score,
+            "best_model_params": best_model_params,
         }
 
     except Exception as e:

@@ -244,11 +244,11 @@ elif selected_page == "Model Suggestions":
             if results is None:
                 st.info(
                     "This step will:\n"
-                    "- Identify the best model family using an internal model search\n"
-                    "- Use feature importance to remove irrelevant features\n"
-                    "- Run Optuna to find the best hyperparameters for a pure sklearn model."
+                    "- Identify the best base model using AutoGluon\n"
+                    "- Use its feature importance to drop irrelevant features\n"
+                    "- Show the exact hyperparameters used by that best model"
                 )
-                if st.button("🚀 Run model search and hyperparameter tuning", use_container_width=True):
+                if st.button("🚀 Run model search", use_container_width=True):
                     target_column = st.session_state.target_column
                     st.info("🔍 Identifying the best model...")
                     with st.spinner("Identifying the best model..."):
@@ -256,6 +256,7 @@ elif selected_page == "Model Suggestions":
                             data_for_modeling,
                             target_column=target_column,
                         )
+
                     st.info("🧬 Selecting most relevant features...")
                     with st.spinner("Selecting most relevant features..."):
                         reduced_df, selected_features = select_features_by_importance(
@@ -264,55 +265,46 @@ elif selected_page == "Model Suggestions":
                             feature_importance=ag_results.get("feature_importance"),
                             importance_threshold=0.0,
                         )
-                    st.info("🎯 Finding the best hyperparameters...")
-                    with st.spinner("Finding the best hyperparameters..."):
-                        tuning_results = tune_model_with_optuna(
-                            df=reduced_df,
-                            target_column=target_column,
-                            model_family=ag_results["best_model_family"],
-                            problem_type=ag_results["problem_type"],
-                            eval_metric=ag_results["eval_metric"],
-                            n_trials=30,
-                            time_limit=120
-                        )
+
+                    # Save final outputs in session_state
                     st.session_state.modeling_results = {
                         "problem_type": ag_results["problem_type"],
                         "eval_metric": ag_results["eval_metric"],
                         "auto_best_model_name": ag_results["best_model_name"],
                         "auto_best_model_family": ag_results["best_model_family"],
                         "selected_features": selected_features,
-                        "tuned_model_family": ag_results["best_model_family"],
-                        "tuned_model_class": tuning_results["best_model_class"],
-                        "tuned_params": tuning_results["best_params"],
-                        "final_model": tuning_results["best_model"],
-                        "eval_score": tuning_results["best_eval_score"],
+                        "auto_best_params": ag_results.get("best_model_params", {}),
+                        "auto_best_val_score": ag_results.get("best_val_score", None),
                     }
-                    st.success(
-                        "✅ Best model identified and hyperparameters tuned. "
-                        "You can now inspect the results below."
-                    )
+                    st.success("✅ Best model identified. See details below.")
                     results = st.session_state.modeling_results
+
             if results is not None:
-                st.subheader("🏁 Final Model")
+                st.subheader("🏁 Final Model (AutoGluon)")
                 best_model_label = (
                     results.get("auto_best_model_name")
                     or results.get("auto_best_model_family")
                     or "Unknown model"
                 )
                 st.write(f"**Best Model:** `{best_model_label}`")
-                st.write("**Optimal Hyperparameters:**")
-                st.json(results["tuned_params"])
+
+                # Show the AutoGluon validation score for the best model
                 eval_metric = (results.get("eval_metric") or "").lower()
-                eval_score = results.get("eval_score", None)
+                eval_score = results.get("auto_best_val_score", None)
                 if eval_score is not None:
                     if eval_metric == "roc_auc":
-                        st.write(f"**Validation ROC AUC:** `{eval_score:.4f}`")
+                        st.write(f"**Validation ROC AUC (AutoGluon):** `{eval_score:.4f}`")
                     elif eval_metric == "root_mean_squared_error":
-                        st.write(f"**Validation RMSE:** `{eval_score:.4f}`")
+                        st.write(f"**Validation RMSE (AutoGluon):** `{eval_score:.4f}`")
                     elif eval_metric == "log_loss":
-                        st.write(f"**Validation log_loss:** `{eval_score:.4f}`")
+                        st.write(f"**Validation log_loss (AutoGluon):** `{eval_score:.4f}`")
                     else:
-                        st.write(f"**Validation score:** `{eval_score:.4f}`")
+                        st.write(f"**Validation score (AutoGluon):** `{eval_score:.4f}`")
+
+                # Exact hyperparameters used by the best AG base model
+                st.write("**Hyperparameters used by the best model:**")
+                st.json(results.get("auto_best_params", {}))
+
     else:
         st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
 else:
