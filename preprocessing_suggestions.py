@@ -634,52 +634,130 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
     
     return suggestions
 
-def suggest_feature_combination(analysis_results: dict, target_column: str = None) -> list:
+def suggest_feature_combination(
+    analysis_results: dict,
+    target_column: str = None,
+    max_pairs: int = 9999,          # not a real cap anymore; budget controls the stop
+    memory_growth_cap: float = 0.25 # allow at most +25% more columns (as a proxy for memory)
+) -> list:
     """
-    Generates suggestions for creating new features by combining categorical columns.
-    For each combination, it also suggests an appropriate encoding for the new feature.
+    Adaptive categorical feature-combination suggestions with a data-driven threshold.
+
+    Budget logic (stop-conditions):
+      1) Column budget from samples: total_new_columns <= min(n_samples/5, 2000)
+      2) Column budget from memory proxy: total_new_columns <= current_cols * memory_growth_cap
+      3) Always respect whichever budget is smaller.
     """
+    import itertools
     suggestions = []
-    categorical_info = analysis_results.get('categorical_info', {})
 
-    # Exclude the target column from feature combination suggestions
-    categorical_cols = [col for col in categorical_info.keys() if col != target_column]
+    cat_info = analysis_results.get("categorical_info", {})
+    dtypes = analysis_results.get("general_info", {}).get("data_types", {})
+    shape = analysis_results.get("general_info", {}).get("shape", [0, 0])
+    n_rows, n_cols = shape if isinstance(shape, (list, tuple)) else (0, 0)
 
-    if len(categorical_cols) < 2:
+    # ---- 1) Eligible categorical columns by cardinality & type ----
+    def is_cat(col):
+        t = dtypes.get(col, "")
+        return ("object" in t) or ("category" in t)
+
+    eligible = []
+    for col, info in cat_info.items():
+        if col == target_column:
+            continue
+        if not is_cat(col):
+            continue
+        uv = info.get("unique_values", 0)
+        # Keep moderate-cardinality only (avoid too tiny/too huge)
+        if 2 <= uv <= 30:
+            eligible.append(col)
+
+    if len(eligible) < 2:
         return suggestions
 
-    # Generate all unique pairs of categorical columns
-    column_pairs = list(itertools.combinations(categorical_cols, 2))
+    # ---- 2) Rank pairs by estimated joint cardinality (smaller first) ----
+    pairs = list(itertools.combinations(eligible, 2))
+    pairs.sort(key=lambda p: cat_info[p[0]]["unique_values"] * cat_info[p[1]]["unique_values"])
 
-    for col1, col2 in column_pairs:
-        new_col_name = f"{col1}_{col2}_combined"
+    # ---- 3) Build an adaptive budget in "new columns" units ----
+    # Budget A: sample-based (avoid too many columns vs. rows)
+    budget_from_samples = int(min(max(n_rows // 5, 10), 2000))  # at least 10, at most 2000
 
-        # Suggestion to create the combined feature
+    # Budget B: memory proxy — cap added columns to ≤ 25% of current column count
+    budget_from_memory = max(10, int(n_cols * memory_growth_cap))
+
+    # Final budget = stricter of the two
+    new_cols_budget = max(10, min(budget_from_samples, budget_from_memory))
+
+    # ---- 4) Greedy add pairs while not exceeding budget ----
+    used_new_cols = 0
+
+    def encoding_for_joint(unique_est: int):
+        # Decide encoding & "new columns" cost
+        if unique_est <= 10:
+            return "one_hot_encode", "Apply One-Hot Encoding since combined cardinality is low.", max(1, unique_est - 1)
+        elif unique_est <= 50:
+            return "label_encode", "Apply Label Encoding for moderate cardinality.", 1
+        else:
+            return "frequency_encode", "Apply Frequency Encoding due to high cardinality.", 1
+
+    for c1, c2 in pairs[:max_pairs]:
+        new_col = f"{c1}_{c2}_combined"
+        u1 = cat_info[c1]["unique_values"]
+        u2 = cat_info[c2]["unique_values"]
+        unique_est = u1 * u2
+
+        enc_fn, enc_text, added_cols = encoding_for_joint(unique_est)
+
+        # If adding this pair would exceed budget, try a cheaper encoding before skipping
+        if used_new_cols + added_cols > new_cols_budget:
+            if enc_fn == "one_hot_encode":
+                # fall back to label/frequency to keep within budget
+                enc_fn, enc_text, added_cols = ("label_encode", "Budget-aware: using Label Encoding to limit expansion.", 1)
+            # re-check after fallback
+            if used_new_cols + added_cols > new_cols_budget:
+                continue  # still too expensive → skip pair
+
+        # (a) Combine
         suggestions.append({
-            'feature': f"'{col1}' and '{col2}'",
-            'issue': "Potential to capture interaction effects between features.",
-            'suggestion': (f"Combine '{col1}' and '{col2}' into a single feature "
-                           f"'{new_col_name}' to represent their interaction."),
-            'function_to_call': 'combine_categorical_features',
-            'kwargs': {
-                'columns_to_combine': [col1, col2],
-                'new_col_name': new_col_name,
-                'drop_original': False
+            "feature": f"'{c1}' and '{c2}'",
+            "issue": f"Potential interaction between '{c1}' and '{c2}'.",
+            "suggestion": f"Combine into '{new_col}' to capture joint effects.",
+            "function_to_call": "combine_categorical_features",
+            "kwargs": {
+                "columns_to_combine": [c1, c2],
+                "new_col_name": new_col,
+                "drop_original": False
             }
         })
 
-        # Suggestion to encode the newly created feature.
-        # Since combined features often have high cardinality, Label Encoding is a safe default.
+        # (b) Encode with budget-aware choice
         suggestions.append({
-            'feature': new_col_name,
-            'issue': f"The new feature '{new_col_name}' is categorical and requires encoding for use in most models.",
-            'suggestion': ("Apply Label Encoding to convert this new feature into a numerical format. "
-                           "This is a good starting point for combined features which may have many unique values."),
-            'function_to_call': 'label_encode',
-            'kwargs': {'columns': new_col_name}
+            "feature": new_col,
+            "issue": f"Estimated {unique_est} unique combos; budget cost ≈ +{added_cols} column(s).",
+            "suggestion": enc_text,
+            "function_to_call": enc_fn,
+            "kwargs": {"columns": new_col}
+        })
+
+        used_new_cols += added_cols
+
+        # Optional soft stop if we’ve used ~95% of budget
+        if used_new_cols >= int(0.95 * new_cols_budget):
+            break
+
+    # Helpful tail note if we truncated
+    if used_new_cols >= int(0.95 * new_cols_budget):
+        suggestions.append({
+            "feature": "budget",
+            "issue": "Adaptive threshold reached",
+            "suggestion": f"Limited combined features to keep added columns within ~{new_cols_budget} new columns (≈ {int(memory_growth_cap*100)}% of current width).",
+            "function_to_call": None,
+            "kwargs": {}
         })
 
     return suggestions
+
 
 def suggest_fastica_features(analysis_results: dict, target_column: str = None) -> list:
     """
