@@ -1,3 +1,5 @@
+# main.py
+
 import sys
 print(sys.executable)
 import streamlit as st
@@ -8,6 +10,8 @@ from pre_dashboard import run_preprocessing_dashboard
 from model_suggestion import run_model_suggestions
 from feature_selection import select_features_by_importance
 from optuna_tuning import tune_model_with_optuna
+# --- NEW: Import the new prediction page function ---
+from prediction_page import display_prediction_page
 from typing import List
 
 # --- Page Configuration ---
@@ -24,7 +28,7 @@ if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 if 'target_column' not in st.session_state:
     st.session_state.target_column = None
-if 'id_columns_to_ignore' not in st.session_state: # FIXED: Added initialization
+if 'id_columns_to_ignore' not in st.session_state:
     st.session_state.id_columns_to_ignore = None
 if 'pre_status' not in st.session_state:
     st.session_state.pre_status = None
@@ -32,6 +36,14 @@ if 'pre_df' not in st.session_state:
     st.session_state.pre_df = None
 if 'modeling_results' not in st.session_state:
     st.session_state.modeling_results = None
+
+# --- NEW: Session state keys for the prediction recipe ---
+if 'data_schema' not in st.session_state:
+    st.session_state.data_schema = None # To store data types
+if 'transformation_pipeline' not in st.session_state:
+    st.session_state.transformation_pipeline = None # To store preprocessing steps
+if 'prediction_results_df' not in st.session_state:
+    st.session_state.prediction_results_df = None
 
 
 # --- NEW: Validation Helper Function ---
@@ -84,7 +96,10 @@ def display_home_page():
         try:
             st.session_state.df = pd.read_csv(uploaded_file)
             # Reset all dependent states
-            keys_to_reset = ['analysis_results', 'pre_status', 'pre_df', 'id_columns_to_ignore', 'modeling_results', 'target_column']
+            keys_to_reset = [
+                'analysis_results', 'pre_status', 'pre_df', 'id_columns_to_ignore', 
+                'modeling_results', 'target_column', 'data_schema', 'transformation_pipeline'
+            ]
             for key in keys_to_reset:
                 st.session_state[key] = None
             st.success("✅ File uploaded successfully!")
@@ -153,6 +168,9 @@ def display_home_page():
                             modified_df[col_name] = st.session_state.df[col_name]
 
             st.session_state.df = modified_df
+            # --- NEW: Save the final data schema ---
+            st.session_state.data_schema = st.session_state.df.dtypes.to_dict()
+
 
         # --- Identifier Column Selection ---
         st.subheader("⚙️ Configure Identifier Columns")
@@ -188,11 +206,15 @@ def display_home_page():
             st.success("✅ Analysis complete! Use the sidebar to explore results.")
 
         if col2.button("🗑️ Clear Dataset", use_container_width=True):
-            keys_to_clear = ['df', 'analysis_results', 'target_column', 'pre_status', 'pre_df', 'modeling_results', 'id_columns_to_ignore']
+            keys_to_clear = [
+                'df', 'analysis_results', 'target_column', 'pre_status', 
+                'pre_df', 'modeling_results', 'id_columns_to_ignore',
+                'data_schema', 'transformation_pipeline', 'prediction_results_df'
+            ]
             for key in keys_to_clear:
                 st.session_state[key] = None
             st.rerun()
-# --- (The rest of the file remains unchanged) ---
+
 
 # --- Sidebar Navigation ---
 pages = [
@@ -206,7 +228,9 @@ pages = [
     "Outlier Info",
     "Duplicate Analysis",
     "Preprocessing Suggestions",
-    "Model Suggestions"  
+    "Model Suggestions",
+    # --- NEW: Add the prediction page to the list ---
+    "Make Predictions"
 ]
 
 st.sidebar.title("📚 Navigation")
@@ -222,9 +246,14 @@ elif selected_page == "Preprocessing Suggestions":
             st.session_state.analysis_results,
             st.session_state.df
         )
-        st.session_state.df = final_df
+        # The pre_df and status are now handled inside the dashboard function
     else:
         st.warning("⚠️ Please upload a dataset and run the analysis first.")
+
+# --- NEW: Add routing for the prediction page ---
+elif selected_page == "Make Predictions":
+    display_prediction_page()
+
 
 elif selected_page == "Model Suggestions":
     if st.session_state.df is not None and st.session_state.target_column:
