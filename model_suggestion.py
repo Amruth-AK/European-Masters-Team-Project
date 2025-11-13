@@ -1,9 +1,18 @@
+from autogluon.tabular.predictor.predictor import os
 import pandas as pd
 from autogluon.tabular import TabularPredictor
+from autogluon.features.generators import IdentityFeatureGenerator
+from autogluon.common.features.feature_metadata import FeatureMetadata 
+
+
+
 from typing import Dict, Any, Optional
 import tempfile
 import shutil
 import logging
+import os
+import time
+import glob
 
 # Configure logging to suppress verbose AutoGluon output if desired
 logging.basicConfig(level=logging.WARNING)
@@ -108,45 +117,61 @@ def run_model_suggestions(
         raise ValueError("The input dataset is empty.")
 
     # Work on a copy so we don't mutate the original dataframe
-    df = df.copy()
+    df_processed = df.copy()
 
     # Drop rows where target is missing (AutoGluon cannot train with NaN labels)
-    df = df.dropna(subset=[target_column])
-    if df.empty:
+    df_processed = df_processed.dropna(subset=[target_column])
+    if df_processed.empty:
         raise ValueError("All rows have missing values in the target column.")
 
     # Detect problem type and metric
-    problem_type, eval_metric = _detect_problem_type(df, target_column)
+    problem_type, eval_metric = _detect_problem_type(df_processed, target_column)
 
-    # Default training time_limit if not provided
     if time_limit is None:
-        time_limit = 60  # seconds, adjust if you want
+        time_limit = _calculate_adaptive_time_limit(df_processed, target_column)
+        print(f"Auto-calculated time_limit: {time_limit} seconds ({time_limit/60:.1f} minutes) based on dataset size")
 
-    # --- SOLUTION IMPLEMENTED HERE ---
-    # Create a temporary directory for AutoGluon models to avoid permission issues.
-    model_path = tempfile.mkdtemp(prefix="ag_models_")
+    # Optional but recommended: Tell AutoGluon the type of each column, prevent it from re-inferring & triggering extra preprocessing
+    feature_metadata = FeatureMetadata.from_df(df_processed)
+
+    # 清理旧的临时目录（1小时以上的）
+    temp_dir = tempfile.gettempdir()
+    old_ag_dirs = glob.glob(f"{temp_dir}/ag_models_*")
+    for old_dir in old_ag_dirs:
+        try:
+            
+            if os.path.getmtime(old_dir) < time.time() - 3600:
+                shutil.rmtree(old_dir, ignore_errors=True)
+        except:
+            pass
+
+    model_path = tempfile.mkdtemp(prefix=f"ag_models_{int(time.time())}_")
+    
+    
+    if os.path.exists(model_path) and os.listdir(model_path):
+        shutil.rmtree(model_path, ignore_errors=True)
+        model_path = tempfile.mkdtemp(prefix=f"ag_models_{int(time.time())}_")
+
     print(f"AutoGluon models will be saved to temporary directory: {model_path}")
 
     try:
-        # Train AutoGluon predictor inside the temporary path
         predictor = TabularPredictor(
             label=target_column,
             problem_type=problem_type,
             eval_metric=eval_metric,
-            path=model_path, # Specify the output path
+            path=model_path,
         ).fit(
-            train_data=df,
+            train_data=df_processed,  # Use processed DataFrame
+            feature_generator=IdentityFeatureGenerator(),  # basic AutoGluon built-in preprocessing
+            feature_metadata=feature_metadata,  # optional: let AutoGluon not guess dtype
             time_limit=time_limit,
             presets=presets,
-            # Disable dynamic stacking which can sometimes cause the permission error
-            # This is an extra precaution
             dynamic_stacking=False,
-            # Suppress verbose output in the Streamlit app
-            verbosity=0
+            verbosity=0,
         )
 
         # Get leaderboard
-        leaderboard = predictor.leaderboard(silent=True)
+        leaderboard = predictor.leaderboard(silent=True)  # silent=True to suppress output  
         
         print("\nTop 5 Models by Validation Score:")
         print(leaderboard.head(5)[['model', 'score_val']])
@@ -205,3 +230,42 @@ def run_model_suggestions(
         results["predictor_path"] = None # Path is no longer valid
 
     return results
+
+
+
+
+def _calculate_adaptive_time_limit(df: pd.DataFrame, target_column: str) -> int:
+    """
+    Calculate adaptive time limit based on dataset characteristics.
+    
+    Formula:
+    - Base time: 2 minutes per 10k samples
+    - Feature penalty: +30 seconds per 100 features
+    - Problem type multiplier: multiclass (1.5x), regression (1.2x), binary (1.0x)
+    
+    Returns:
+    - Minimum: 300 seconds (5 minutes)
+    - Maximum: 3600 seconds (1 hour)
+    """
+    n_samples = len(df)
+    n_features = len(df.columns) - 1  # Exclude target column
+    
+    # Base time: 2 minutes per 10k samples
+    base_time = max(60, (n_samples / 10000) * 120)
+    
+    # Feature penalty: +30 seconds per 100 features
+    feature_penalty = (n_features / 100) * 30
+    
+    # Problem type multiplier
+    problem_type, _ = _detect_problem_type(df, target_column)
+    if problem_type == "multiclass":
+        multiplier = 1.5
+    elif problem_type == "regression":
+        multiplier = 1.2
+    else:  # binary
+        multiplier = 1.0
+    
+    recommended = int((base_time + feature_penalty) * multiplier)
+    
+    # Cap between 5 minutes and 1 hour
+    return max(300, min(recommended, 3600))
