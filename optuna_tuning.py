@@ -30,17 +30,7 @@ import catboost as cb
 def _choose_model_class(model_family: str, problem_type: str):
     """
     Map AutoGluon's coarse model family to a concrete implementation.
-
-    Expected families (from your model_suggestion.py):
-        - "lightgbm"
-        - "xgboost"
-        - "catboost"
-        - "random_forest"
-        - "extra_trees"
-        - "knn"
-        - "neural_network"
-        - "linear_model"
-        - "unknown" (fallback)
+    UPDATED to handle 'ensemble_trees'.
     """
     mf = (model_family or "").lower()
     pt = (problem_type or "").lower()
@@ -50,28 +40,18 @@ def _choose_model_class(model_family: str, problem_type: str):
 
     if mf == "lightgbm":
         return lgb.LGBMRegressor if is_reg else lgb.LGBMClassifier
-
     if mf == "xgboost":
         return xgb.XGBRegressor if is_reg else xgb.XGBClassifier
-
     if mf == "catboost":
         return cb.CatBoostRegressor if is_reg else cb.CatBoostClassifier
-
-    if mf == "random_forest":
+    if mf == "ensemble_trees": # MODIFIED: Handles the new combined family
         return RandomForestRegressor if is_reg else RandomForestClassifier
-
-    if mf == "extra_trees":
-        return ExtraTreesRegressor if is_reg else ExtraTreesClassifier
-
     if mf == "knn":
         return KNeighborsRegressor if is_reg else KNeighborsClassifier
-
     if mf == "neural_network":
         return MLPRegressor if is_reg else MLPClassifier
-
     if mf == "linear_model":
         return LinearRegression if is_reg else LogisticRegression
-
     # Fallback if family is "unknown" or something unexpected
     return RandomForestRegressor if is_reg else RandomForestClassifier
 
@@ -235,33 +215,6 @@ def tune_model_with_optuna(
 ) -> Dict[str, Any]:
     """
     Tune hyperparameters with Optuna for the SAME model family that AutoGluon chose.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Preprocessed dataset used for modeling.
-    target_column : str
-        Target column name.
-    model_family : str
-        Coarse family from AutoGluon ("lightgbm", "xgboost", "catboost", etc.).
-    problem_type : str
-        "regression", "binary", or "multiclass".
-    eval_metric : str
-        "root_mean_squared_error", "roc_auc", or "log_loss".
-        We always define the objective so that LOWER is better.
-    n_trials : int
-        Number of Optuna trials.
-
-    Returns
-    -------
-    dict with keys:
-        - best_model_class : str
-        - best_params      : Dict[str, Any]
-        - best_model       : fitted model (trained on ALL data)
-        - best_objective   : float (value minimized by Optuna)
-        - best_eval_score  : float (human-friendly metric: RMSE / AUC / log_loss)
-        - metric_name      : str (original metric name)
-        - study            : Optuna study object
     """
     if target_column not in df.columns:
         raise ValueError("Target column not found in dataframe.")
@@ -288,7 +241,6 @@ def tune_model_with_optuna(
         X, y, test_size=0.2, random_state=42, stratify=stratify
     )
 
-    # Keep both the original name and a lower-cased internal version
     metric_name = eval_metric
     metric_internal = (eval_metric or "").lower()
 
@@ -296,7 +248,6 @@ def tune_model_with_optuna(
         ModelClass = _choose_model_class(model_family, problem_type)
         params = _build_model_params(trial, ModelClass, model_family, problem_type)
 
-        # Special defaults for CatBoost
         if ModelClass in (cb.CatBoostRegressor, cb.CatBoostClassifier):
             params.setdefault("verbose", 0)
             params.setdefault("random_state", 42)
@@ -306,58 +257,40 @@ def tune_model_with_optuna(
 
         if is_reg:
             y_pred = model.predict(X_valid)
-            # Old sklearn doesn't support squared=False, so compute RMSE manually
             mse = mean_squared_error(y_valid, y_pred)
-            rmse = np.sqrt(mse)
-            # For regression we MINIMIZE RMSE directly
-            return rmse
+            return np.sqrt(mse)
 
-        # Classification: need probabilities
         if hasattr(model, "predict_proba"):
             proba = model.predict_proba(X_valid)
         else:
-            # Very unlikely with the models we use, but safety fallback
             y_pred = model.predict(X_valid)
             classes = np.unique(y_train)
             proba = np.zeros((len(y_pred), len(classes)))
             for i, c in enumerate(classes):
                 proba[:, i] = (y_pred == c).astype(float)
 
-        # Binary AUC → we MINIMIZE (1 - AUC)
         if metric_internal == "roc_auc" and pt == "binary":
             auc = roc_auc_score(y_valid, proba[:, 1])
             return 1.0 - auc
 
-        # Default for classification: log_loss (works for binary & multiclass)
         return log_loss(y_valid, proba)
 
     study = optuna.create_study(direction="minimize")
+    study.optimize(objective, n_trials=n_trials, timeout=time_limit)
 
-    # If time_limit is set (in seconds), stop after that many seconds overall
-    if time_limit is not None:
-        study.optimize(objective, n_trials=n_trials, timeout=time_limit)
-    else:
-        study.optimize(objective, n_trials=n_trials)
-
-
-    # --- Convert Optuna objective back into human-friendly score ---
     best_objective = study.best_value
     if is_reg:
-        # objective is RMSE already
         best_eval_score = best_objective
     elif metric_internal == "roc_auc" and pt == "binary":
-        # objective = 1 - AUC → AUC = 1 - objective
         best_eval_score = 1.0 - best_objective
     else:
-        # log_loss or any other "lower is better" metric
         best_eval_score = best_objective
 
-    # --- Refit best model on FULL data (X, y) ---
     ModelClass = _choose_model_class(model_family, problem_type)
     best_params = study.best_params.copy()
 
     mf_lower = (model_family or "").lower()
-    if mf_lower in ("lightgbm", "xgboost", "random_forest", "extra_trees"):
+    if mf_lower in ("lightgbm", "xgboost", "ensemble_trees"):
         best_params.setdefault("random_state", 42)
         best_params.setdefault("n_jobs", -1)
 
@@ -365,7 +298,6 @@ def tune_model_with_optuna(
         best_params.setdefault("verbose", 0)
         best_params.setdefault("random_state", 42)
 
-    # 👉 This is your "another model" with the exact best hyperparameters
     best_model = ModelClass(**best_params)
     best_model.fit(X, y)
 
