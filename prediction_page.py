@@ -84,10 +84,21 @@ def display_prediction_page():
                         if col in processed_df.columns:
                             X_pred[col] = processed_df[col]
                         else:
-                            # If a feature is missing in new data, fill with 0
+                            # If a feature is missing in new data, fill with 0 (numeric default)
                             X_pred[col] = 0
 
-                    X_pred = X_pred.fillna(0)
+                    # 🔧 Safe missing-value handling to avoid categorical errors
+                    for col in X_pred.columns:
+                        # If column is categorical, fill NaNs with the most frequent category
+                        if pd.api.types.is_categorical_dtype(X_pred[col]):
+                            if X_pred[col].isnull().any():
+                                mode = X_pred[col].mode(dropna=True)
+                                if len(mode) > 0:
+                                    X_pred[col] = X_pred[col].fillna(mode[0])
+                        else:
+                            # For numeric / other types, 0 is a safe default
+                            X_pred[col] = X_pred[col].fillna(0)
+
 
                     # 4) Predict
                     model = modeling_results["final_model"]
