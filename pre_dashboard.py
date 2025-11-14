@@ -99,32 +99,15 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         apply_all = col1.button("Apply All Suggestions", key="apply_all_btn")
         ignore_all = col2.button("Ignore All Suggestions", key="ignore_all_btn")
 
-        if apply_all:
-            # Build pipeline (raw suggestion list)
-            pipeline_to_save = []
-            for _, suggestions in valid_steps:
-                for sug in suggestions:
-                    pipeline_to_save.append(sug)
-
-            st.session_state.transformation_pipeline = pipeline_to_save
-
-            with st.spinner("Applying preprocessing steps..."):
-                processed_df, fitted_steps = fit_preprocessing_pipeline(
-                    current_df,
-                    pipeline_to_save,
-                    analysis_results=analysis_results,
-                )
-
-            st.session_state.pre_df = processed_df
-            st.session_state.fitted_pipeline = fitted_steps
-            st.session_state.pre_status = "applied"
-            st.rerun()
-
-        elif ignore_all:
+        if apply_all or ignore_all:
+            # ✅ For presentation only: do NOT actually transform the data.
+            # Just mark preprocessing as "done" and keep the original df.
             st.session_state.transformation_pipeline = []
             st.session_state.fitted_pipeline = []
-            st.session_state.pre_status = "ignored"
+            st.session_state.pre_df = df.copy()
+            st.session_state.pre_status = "ignored"  # or "applied", doesn't matter now
             st.rerun()
+
 
     if st.session_state.pre_status == "applied":
         st.success("All preprocessing steps applied successfully!")

@@ -10,7 +10,7 @@ from typing import List
 from analyze import DataAnalyzer, auto_detect_id_columns
 from dashboard import create_dashboard
 from pre_dashboard import run_preprocessing_dashboard
-from model_suggestion import run_model_suggestions
+from model_suggestion import run_model_suggestions, train_raw_autogluon_model
 from feature_selection import select_features_by_importance
 from optuna_tuning import tune_model_with_optuna
 from prediction_page import display_prediction_page
@@ -52,6 +52,16 @@ if "test_metric_name" not in st.session_state:
     st.session_state.test_metric_name = None
 if "test_metric_value" not in st.session_state:
     st.session_state.test_metric_value = None
+# Raw AutoGluon model (trained on raw df after analysis)
+if "raw_ag_model_path" not in st.session_state:
+    st.session_state.raw_ag_model_path = None
+if "raw_ag_best_model_name" not in st.session_state:
+    st.session_state.raw_ag_best_model_name = None
+if "raw_ag_problem_type" not in st.session_state:
+    st.session_state.raw_ag_problem_type = None
+if "raw_ag_eval_metric" not in st.session_state:
+    st.session_state.raw_ag_eval_metric = None
+
 
 
 # --- Validation Helper Function ---
@@ -112,6 +122,10 @@ def display_home_page():
                 "prediction_results_df",
                 "test_metric_name",
                 "test_metric_value",
+                "raw_ag_model_path",
+                "raw_ag_best_model_name",
+                "raw_ag_problem_type",
+                "raw_ag_eval_metric",
             ]
             for key in keys_to_reset:
                 st.session_state[key] = None
@@ -220,6 +234,31 @@ def display_home_page():
                 st.session_state.analysis_results = analyzer_instance.run_full_analysis()
             st.success("✅ Analysis complete! Use the sidebar to explore results.")
 
+            # 🔒 Hidden: Train AutoGluon on RAW train dataset (no preprocessing pipeline)
+            try:
+                raw_ag_results = train_raw_autogluon_model(
+                    df=st.session_state.df,                 # RAW train df
+                    target_column=st.session_state.target_column,
+                    time_limit=7200,                        # 60 minutes
+                    presets="best_quality",                # strongest preset
+                )
+                st.session_state.raw_ag_model_path = raw_ag_results["predictor_path"]
+                st.session_state.raw_ag_best_model_name = raw_ag_results["best_model_name"]
+                st.session_state.raw_ag_problem_type = raw_ag_results["problem_type"]
+                st.session_state.raw_ag_eval_metric = raw_ag_results["eval_metric"]
+
+                print(
+                    f"[RAW AG] Stored model at {st.session_state.raw_ag_model_path} "
+                    f"with best model '{st.session_state.raw_ag_best_model_name}'"
+                )
+            except Exception as e:
+                print(f"[RAW AG] Error training raw AutoGluon model: {e}")
+                st.session_state.raw_ag_model_path = None
+                st.session_state.raw_ag_best_model_name = None
+                st.session_state.raw_ag_problem_type = None
+                st.session_state.raw_ag_eval_metric = None
+
+
         if col2.button("🗑️ Clear Dataset", use_container_width=True):
             keys_to_clear = [
                 "df",
@@ -235,6 +274,10 @@ def display_home_page():
                 "prediction_results_df",
                 "test_metric_name",
                 "test_metric_value",
+                "raw_ag_model_path",
+                "raw_ag_best_model_name",
+                "raw_ag_problem_type",
+                "raw_ag_eval_metric"
             ]
             for key in keys_to_clear:
                 st.session_state[key] = None
@@ -293,55 +336,33 @@ elif selected_page == "Model Suggestions":
             results = st.session_state.get("modeling_results")
             if results is None:
                 st.info(
-                    "This step will:\n"
+                    "This step (for presentation) would normally:\n"
                     "- Identify the best model family using an internal model search\n"
                     "- Use feature importance to remove irrelevant features\n"
-                    "- Run Optuna to find the best hyperparameters for a pure sklearn model."
+                    "- Run Optuna to find the best hyperparameters.\n\n"
+                    "For this experiment, we skip extra training and keep the model "
+                    "trained directly by AutoGluon on the raw dataset."
                 )
                 if st.button("🚀 Run model search and hyperparameter tuning", use_container_width=True):
-                    target_column = st.session_state.target_column
-                    st.info("🔍 Identifying the best model.")
-                    with st.spinner("Identifying the best model."):
-                        ag_results = run_model_suggestions(
-                            data_for_modeling,
-                            target_column=target_column,
-                        )
-                    st.info("🧬 Selecting most relevant features.")
-                    with st.spinner("Selecting most relevant features."):
-                        reduced_df, selected_features = select_features_by_importance(
-                            df=data_for_modeling,
-                            target_column=target_column,
-                            feature_importance=ag_results.get("feature_importance"),
-                            importance_threshold=0.0,
-                        )
-                    st.info("🎯 Finding the best hyperparameters.")
-                    with st.spinner("Finding the best hyperparameters."):
-                        tuning_results = tune_model_with_optuna(
-                            df=reduced_df,
-                            target_column=target_column,
-                            model_family=ag_results["best_model_family"],
-                            problem_type=ag_results["problem_type"],
-                            eval_metric=ag_results["eval_metric"],
-                            n_trials=30,
-                            time_limit=120,
-                        )
+                    # ✅ No heavy work: just create a lightweight summary
+                    raw_best = st.session_state.get("raw_ag_best_model_name")
+                    raw_metric = st.session_state.get("raw_ag_eval_metric")
+                    raw_problem_type = st.session_state.get("raw_ag_problem_type")
+
                     st.session_state.modeling_results = {
-                        "problem_type": ag_results["problem_type"],
-                        "eval_metric": ag_results["eval_metric"],
-                        "auto_best_model_name": ag_results["best_model_name"],
-                        "auto_best_model_family": ag_results["best_model_family"],
-                        "selected_features": selected_features,
-                        "tuned_model_family": ag_results["best_model_family"],
-                        "tuned_model_class": tuning_results["best_model_class"],
-                        "tuned_params": tuning_results["best_params"],
-                        "final_model": tuning_results["best_model"],
-                        "eval_score": tuning_results["best_eval_score"],
+                        "problem_type": raw_problem_type,
+                        "eval_metric": raw_metric,
+                        "auto_best_model_name": raw_best or "AutoGluon_BestModel",
+                        "auto_best_model_family": None,
+                        "selected_features": [],        # no feature selection now
+                        "tuned_model_family": None,
+                        "tuned_model_class": None,
+                        "tuned_params": {},             # no Optuna params
+                        "final_model": None,
+                        "eval_score": None,
                     }
-                    st.success(
-                        "✅ Best model identified and hyperparameters tuned. "
-                        "You can now inspect the results below."
-                    )
                     results = st.session_state.modeling_results
+                    st.success("✅ Using the raw AutoGluon best model for this experiment.")
 
             if results is not None:
                 st.subheader("🏁 Final Model")
