@@ -801,7 +801,8 @@ def create_features_from_high_correlation(
     min_cardinality: int = 3,
     max_new_features: int = 500,
     corr_filter_threshold: float = 0.95,
-    min_variance: float = 1e-6  
+    min_variance: float = 1e-6,
+    **kwargs
 ) -> pd.DataFrame:
     """
     Create new features from highly correlated pairs with multi-layer filtering.
@@ -900,11 +901,44 @@ def create_features_from_high_correlation(
             print(f"  Warning: No target column specified, using random sampling")
             candidate_df = candidate_df.sample(n=max_new_features, random_state=42, axis=1)
     
-    # 7. Add to DataFrame
+    # 7. Add second-order features to DataFrame
+    second_order_count = len(candidate_df.columns)
     for col in candidate_df.columns:
         df[col] = candidate_df[col]
     
-    print(f"✅ Added {len(candidate_df.columns)} new features")
+    print(f"✅ Added {second_order_count} 2nd-order features")
+    
+    # 8. Generate third-order features (optional, only if we have enough second-order features)
+    generate_third_order = kwargs.get('generate_third_order', True)  # Default: enabled
+    min_second_for_third = kwargs.get('min_second_for_third', 20)
+    
+    if generate_third_order and second_order_count >= min_second_for_third:
+        print("\n🔬 Generating 3rd-order interaction features...")
+        
+        max_third_order = kwargs.get('max_third_order_features', 30)
+        top_second_for_third = kwargs.get('top_second_for_third', 50)
+        top_original_for_third = kwargs.get('top_original_for_third', 30)
+        
+        third_order_df = _generate_third_order_features(
+            df=df,
+            second_order_features=candidate_df,
+            original_features=numerical_cols,
+            target_column=target_column,
+            max_third_order=max_third_order,
+            top_second_for_third=min(top_second_for_third, second_order_count),
+            top_original_for_third=top_original_for_third
+        )
+        
+        # Add third-order features to DataFrame
+        third_order_count = len(third_order_df.columns)
+        for col in third_order_df.columns:
+            df[col] = third_order_df[col]
+        
+        total_new_features = second_order_count + third_order_count
+        print(f"\n✅ Total: {second_order_count} 2nd-order + {third_order_count} 3rd-order = {total_new_features} features")
+    elif generate_third_order and second_order_count < min_second_for_third:
+        print(f"\n⚠️ Skipping 3rd-order generation (need at least {min_second_for_third} 2nd-order features, have {second_order_count})")
+    
     return df
 
 

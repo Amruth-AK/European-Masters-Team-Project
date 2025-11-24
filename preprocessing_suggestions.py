@@ -629,14 +629,14 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
             'feature_types': feature_types,
             'use_basic_filter': True,
             'use_correlation_filter': True,
-            'min_cardinality': 4,
+            'min_cardinality': 2,              # Relaxed from 4 to 2
             'max_new_features': max_new_features,
-            'corr_filter_threshold': 0.9,
-            'min_variance': 1e-4,
+            'corr_filter_threshold': 0.95,     # Relaxed from 0.9 to 0.95
+            'min_variance': 1e-6,              # Relaxed from 1e-4 to 1e-6
             'target_column': target_column,
             # Third-order feature generation parameters
             'generate_third_order': True,           # Enable 3rd-order features
-            'min_second_for_third': 20,             # Minimum 2nd-order features needed
+            'min_second_for_third': 10,             # Reduced from 20 to 10 (easier to trigger)
             'max_third_order_features': 30,         # Maximum 3rd-order features to keep
             'top_second_for_third': 50,             # Top N 2nd-order features to use
             'top_original_for_third': 30            # Top N original features to use
