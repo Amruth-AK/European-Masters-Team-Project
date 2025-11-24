@@ -567,13 +567,34 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
     if not high_corr_pairs:
         return suggestions
 
-    # Adaptive max_new_features based on dataset size
+    # Adaptive max_new_features based on dataset characteristics # Add Zhiqi
     shape = analysis_results.get('general_info', {}).get('shape', [0, 0])
     n_samples = shape[0] if shape else 0
+    n_features = shape[1] if shape else 0
+    
+    # Formula: min(samples/10, original_features*2, 200)
+    # This ensures: 1) sample-to-feature ratio stays healthy
+    #               2) don't add too many features relative to original
+    #               3) absolute cap to prevent explosion
     if strategy == "all_pairs":
-        max_new_features = 10 if n_samples < 1000 else 20 if n_samples < 10000 else 30
+        # More conservative for all_pairs strategy
+        max_new_features = min(
+            n_samples // 15,      # Conservative ratio
+            n_features,           # Don't exceed original feature count
+            100                   # Lower absolute cap
+        )
+        max_new_features = max(20, max_new_features)  # At least 20
     else:
-        max_new_features = 30 if n_samples < 1000 else 60 if n_samples < 10000 else 120
+        # More generous for targeted high-correlation pairs
+        max_new_features = min(
+            n_samples // 10,      # Healthy sample-to-feature ratio
+            n_features * 2,       # Up to 2x original features
+            200                   # Reasonable absolute cap
+        )
+        max_new_features = max(50, max_new_features)  # At least 50
+    
+    print(f"📊 Dataset: {n_samples} samples, {n_features} features")
+    print(f"📊 Adaptive limit: {max_new_features} new features (strategy: {strategy})")
 
     # Create suggestion messages
     median_corr = np.median(all_corrs)
@@ -612,7 +633,13 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
             'max_new_features': max_new_features,
             'corr_filter_threshold': 0.9,
             'min_variance': 1e-4,
-            'target_column': target_column
+            'target_column': target_column,
+            # Third-order feature generation parameters
+            'generate_third_order': True,           # Enable 3rd-order features
+            'min_second_for_third': 20,             # Minimum 2nd-order features needed
+            'max_third_order_features': 30,         # Maximum 3rd-order features to keep
+            'top_second_for_third': 50,             # Top N 2nd-order features to use
+            'top_original_for_third': 30            # Top N original features to use
         }
     })
 

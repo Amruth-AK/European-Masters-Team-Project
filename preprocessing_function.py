@@ -868,10 +868,37 @@ def create_features_from_high_correlation(
     if use_correlation_filter and len(candidate_df.columns) > 1:
         candidate_df = _apply_correlation_filter(candidate_df, corr_filter_threshold)
     
-    # 6. Limit features
+    # 6. Intelligent feature selection based on target correlation # Add Zhiqi
     if len(candidate_df.columns) > max_new_features:
-        print(f"⚠️ Limiting to {max_new_features} features")
-        candidate_df = candidate_df.sample(n=max_new_features, random_state=42, axis=1)
+        print(f"⚠️ Selecting top {max_new_features} features based on target correlation")
+        
+        # Calculate correlation with target for each candidate feature
+        if target_column and target_column in df.columns:
+            target_corrs = {}
+            for col in candidate_df.columns:
+                try:
+                    corr = abs(candidate_df[col].corr(df[target_column]))
+                    if not pd.isna(corr):
+                        target_corrs[col] = corr
+                except:
+                    # If correlation calculation fails, assign low score
+                    target_corrs[col] = 0.0
+            
+            # Sort by correlation and select top features
+            sorted_features = sorted(target_corrs.items(), key=lambda x: x[1], reverse=True)
+            selected_cols = [f[0] for f in sorted_features[:max_new_features]]
+            candidate_df = candidate_df[selected_cols]
+            
+            # Show statistics
+            avg_corr = np.mean([f[1] for f in sorted_features[:max_new_features]])
+            print(f"  Average target correlation of selected features: {avg_corr:.4f}")
+            print(f"  Top 5 features by correlation:")
+            for feat, corr in sorted_features[:5]:
+                print(f"    - {feat}: {corr:.4f}")
+        else:
+            # Fallback to random sampling if no target column
+            print(f"  Warning: No target column specified, using random sampling")
+            candidate_df = candidate_df.sample(n=max_new_features, random_state=42, axis=1)
     
     # 7. Add to DataFrame
     for col in candidate_df.columns:
@@ -1037,6 +1064,147 @@ def _apply_correlation_filter(candidate_df, threshold):
     print(f"  Correlation filter: {n_before} → {len(candidate_df.columns)} features")
     
     return candidate_df
+
+
+def _generate_third_order_features(
+    df: pd.DataFrame,
+    second_order_features: pd.DataFrame,
+    original_features: List[str],
+    target_column: str,
+    max_third_order: int = 30,
+    top_second_for_third: int = 50,
+    top_original_for_third: int = 30
+) -> pd.DataFrame:
+    """
+    Generate third-order interaction features from the best second-order features.
+    
+    Strategy: Combine top second-order features with top original features
+    to create meaningful third-order interactions like (A*B)*C, (A/B)+C, etc.
+    
+    Args:
+        df: Original DataFrame (must contain target_column)
+        second_order_features: DataFrame with second-order features
+        original_features: List of original numerical feature names
+        target_column: Target column name for correlation calculation
+        max_third_order: Maximum number of third-order features to keep
+        top_second_for_third: Number of top second-order features to use
+        top_original_for_third: Number of top original features to use
+    
+    Returns:
+        DataFrame with selected third-order features
+    """
+    if target_column not in df.columns:
+        print("  Warning: Target column not found, skipping 3rd-order generation")
+        return pd.DataFrame()
+    
+    # 1. Select best second-order features based on target correlation
+    second_order_corrs = {}
+    for col in second_order_features.columns:
+        try:
+            corr = abs(second_order_features[col].corr(df[target_column]))
+            if not pd.isna(corr):
+                second_order_corrs[col] = corr
+        except:
+            continue
+    
+    if not second_order_corrs:
+        print("  Warning: No valid second-order features, skipping 3rd-order generation")
+        return pd.DataFrame()
+    
+    sorted_second = sorted(second_order_corrs.items(), key=lambda x: x[1], reverse=True)
+    top_second_features = [f[0] for f in sorted_second[:top_second_for_third]]
+    
+    # 2. Select best original features based on target correlation
+    original_corrs = {}
+    for col in original_features:
+        if col in df.columns and col != target_column:
+            try:
+                corr = abs(df[col].corr(df[target_column]))
+                if not pd.isna(corr):
+                    original_corrs[col] = corr
+            except:
+                continue
+    
+    sorted_original = sorted(original_corrs.items(), key=lambda x: x[1], reverse=True)
+    top_original_features = [f[0] for f in sorted_original[:top_original_for_third]]
+    
+    print(f"  Generating 3rd-order from {len(top_second_features)} 2nd-order × {len(top_original_features)} original features")
+    
+    # 3. Generate third-order candidates
+    candidates = {}
+    for second_feat in top_second_features:
+        second_values = second_order_features[second_feat]
+        
+        for orig_feat in top_original_features:
+            if orig_feat not in df.columns:
+                continue
+            
+            orig_values = df[orig_feat]
+            
+            # Avoid division by zero
+            orig_nonzero = orig_values.replace(0, np.nan)
+            second_nonzero = second_values.replace(0, np.nan)
+            
+            # Generate 4 types of interactions
+            try:
+                candidates[f'{second_feat}_x_{orig_feat}'] = second_values * orig_values
+            except:
+                pass
+            
+            try:
+                candidates[f'{second_feat}_div_{orig_feat}'] = second_values / orig_nonzero
+            except:
+                pass
+            
+            try:
+                candidates[f'{second_feat}_plus_{orig_feat}'] = second_values + orig_values
+            except:
+                pass
+            
+            try:
+                candidates[f'{second_feat}_minus_{orig_feat}'] = second_values - orig_values
+            except:
+                pass
+    
+    if not candidates:
+        print("  Warning: No 3rd-order candidates generated")
+        return pd.DataFrame()
+    
+    candidate_df = pd.DataFrame(candidates, index=df.index)
+    print(f"  Generated {len(candidate_df.columns)} 3rd-order candidates")
+    
+    # 4. Apply basic filtering
+    candidate_df = _apply_basic_filter(candidate_df, min_cardinality=3, min_variance=1e-5)
+    print(f"  After basic filter: {len(candidate_df.columns)} 3rd-order features")
+    
+    if candidate_df.empty:
+        return candidate_df
+    
+    # 5. Select based on target correlation
+    third_order_corrs = {}
+    for col in candidate_df.columns:
+        try:
+            corr = abs(candidate_df[col].corr(df[target_column]))
+            if not pd.isna(corr):
+                third_order_corrs[col] = corr
+        except:
+            third_order_corrs[col] = 0.0
+    
+    sorted_third = sorted(third_order_corrs.items(), key=lambda x: x[1], reverse=True)
+    selected_third = [f[0] for f in sorted_third[:max_third_order]]
+    
+    result_df = candidate_df[selected_third]
+    
+    # 6. Display statistics
+    if len(sorted_third) > 0:
+        avg_corr = np.mean([f[1] for f in sorted_third[:max_third_order]])
+        print(f"  ✅ Selected {len(result_df.columns)} 3rd-order features")
+        print(f"  Average target correlation: {avg_corr:.4f}")
+        print(f"  Top 3 3rd-order features:")
+        for feat, corr in sorted_third[:3]:
+            print(f"    - {feat[:80]}...: {corr:.4f}" if len(feat) > 80 else f"    - {feat}: {corr:.4f}")
+    
+    return result_df
 
 
 def create_features_from_correlation_analysis(
