@@ -140,6 +140,16 @@ def run_model_suggestions(
             train_data=df,
             time_limit=time_limit,
             presets=presets,
+            # Disable advanced feature generation to respect manual preprocessing
+            _feature_generator_kwargs={
+                'enable_numeric_features': True,
+                'enable_categorical_features': True,
+                'enable_datetime_features': False,
+                'enable_text_special_features': False,
+                'enable_text_ngram_features': False,
+                'enable_raw_text_features': False,
+                'enable_vision_features': False,
+            },
             # Exclude FastAI and neural network models that cause hanging on Apple Silicon
             excluded_model_types=['FASTAI', 'NN_TORCH', 'NN_MXNET'],
             # Disable dynamic stacking which can sometimes cause the permission error

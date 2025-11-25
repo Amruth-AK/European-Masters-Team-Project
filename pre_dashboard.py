@@ -19,8 +19,6 @@ from preprocessing_suggestions import (
 
 from preprocessing_registry import FUNC_MAP
 from preprocessing_pipeline import fit_preprocessing_pipeline
-from preprocessing_function import tune_fastica_replace_ratio
-from sklearn.linear_model import LinearRegression, LogisticRegression
 
 
 def apply_suggestion(df, suggestion, analysis_results=None):
@@ -88,13 +86,33 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         st.session_state.fitted_pipeline = []
         return current_df
 
+    # Store selected suggestions
+    selected_suggestions_list = []
+
     # Show suggestions grouped by type
     for step_name, suggestions in valid_steps:
         with st.expander(f"🔹 {step_name}", expanded=True):
-            for sug in suggestions:
-                st.markdown(f"**Attribute:** `{sug['feature']}`")
-                st.info(f"**Issue:** {sug['issue']}")
-                st.warning(f"**Suggestion:** {sug['suggestion']}")
+            for i, sug in enumerate(suggestions):
+                # Create a unique key for the checkbox
+                key = f"select_{step_name}_{i}"
+                
+                # Checkbox for selection (Default: Checked)
+                col_chk, col_det = st.columns([0.05, 0.95])
+                with col_chk:
+                    is_selected = st.checkbox(
+                        "Select", 
+                        value=True, 
+                        key=key, 
+                        label_visibility="collapsed"
+                    )
+                
+                with col_det:
+                    st.markdown(f"**{sug['suggestion']}**")
+                    st.caption(f"Feature: `{sug['feature']}` | Issue: {sug['issue']}")
+
+                if is_selected:
+                    selected_suggestions_list.append(sug)
+
             st.divider()
 
         # Special UI for FastICA Tuning
@@ -141,24 +159,32 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
     # Buttons
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
-        apply_all = col1.button("Apply All Suggestions", key="apply_all_btn")
+        
+        # Count selected
+        n_selected = len(selected_suggestions_list)
+        
+        apply_selected = col1.button(
+            f"Apply Selected Suggestions ({n_selected})", 
+            key="apply_selected_btn",
+            type="primary",
+            disabled=n_selected == 0
+        )
         ignore_all = col2.button("Ignore All Suggestions", key="ignore_all_btn")
 
-        if apply_all:
-            # Build pipeline (raw suggestion list)
+        if apply_selected:
+            # Build pipeline from SELECTED suggestions
             pipeline_to_save = []
-            for _, suggestions in valid_steps:
-                for sug in suggestions:
-                    if sug.get("function_to_call") is not None:
-                        # Override replace_ratio if tuned
-                        if sug["function_to_call"] == "apply_fastica" and "fastica_replace_ratio" in st.session_state:
-                            sug["kwargs"]["replace_ratio"] = st.session_state.fastica_replace_ratio
-                            
-                        pipeline_to_save.append(sug)
+            for sug in selected_suggestions_list:
+                if sug.get("function_to_call") is not None:
+                    # Override replace_ratio if tuned
+                    if sug["function_to_call"] == "apply_fastica" and "fastica_replace_ratio" in st.session_state:
+                        sug["kwargs"]["replace_ratio"] = st.session_state.fastica_replace_ratio
+                        
+                    pipeline_to_save.append(sug)
 
             st.session_state.transformation_pipeline = pipeline_to_save
 
-            with st.spinner("Applying preprocessing steps..."):
+            with st.spinner(f"Applying {len(pipeline_to_save)} preprocessing steps..."):
                 processed_df, fitted_steps = fit_preprocessing_pipeline(
                     current_df,
                     pipeline_to_save,
