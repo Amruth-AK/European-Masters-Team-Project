@@ -120,7 +120,7 @@ def run_model_suggestions(
 
     # Default training time_limit if not provided
     if time_limit is None:
-        time_limit = 60  # seconds, adjust if you want
+        time_limit = 300  # seconds, adjust if you want
 
     # --- SOLUTION IMPLEMENTED HERE ---
     # Create a temporary directory for AutoGluon models to avoid permission issues.
@@ -129,6 +129,8 @@ def run_model_suggestions(
 
     try:
         # Train AutoGluon predictor inside the temporary path
+        print(f"Starting AutoGluon training with time_limit={time_limit}s, presets={presets}")
+        print(f"Dataset shape: {df.shape}, Target: {target_column}")
         predictor = TabularPredictor(
             label=target_column,
             problem_type=problem_type,
@@ -138,12 +140,25 @@ def run_model_suggestions(
             train_data=df,
             time_limit=time_limit,
             presets=presets,
+            # Disable advanced feature generation to respect manual preprocessing
+            _feature_generator_kwargs={
+                'enable_numeric_features': True,
+                'enable_categorical_features': True,
+                'enable_datetime_features': False,
+                'enable_text_special_features': False,
+                'enable_text_ngram_features': False,
+                'enable_raw_text_features': False,
+                'enable_vision_features': False,
+            },
+            # Exclude FastAI and neural network models that cause hanging on Apple Silicon
+            excluded_model_types=['FASTAI', 'NN_TORCH', 'NN_MXNET'],
             # Disable dynamic stacking which can sometimes cause the permission error
             # This is an extra precaution
             dynamic_stacking=False,
-            # Suppress verbose output in the Streamlit app
-            verbosity=0
+            # Show detailed output to debug hanging issues
+            verbosity=2  # Changed from 0 to 2 for debugging
         )
+        print("AutoGluon training completed!")
 
         # Get leaderboard
         leaderboard = predictor.leaderboard(silent=True)
@@ -173,11 +188,22 @@ def run_model_suggestions(
         best_model_family = _infer_model_family(best_model_name)
 
         # Compute feature importance for downstream feature selection
+        print("\nComputing feature importance...")
         try:
             fi_df = predictor.feature_importance(data=df)
+            print(f"Feature importance computed successfully! Shape: {fi_df.shape if fi_df is not None else 'None'}")
         except Exception as e:
             print(f"Could not compute feature importance: {e}")
             fi_df = None
+
+        # Extract best model hyperparameters
+        best_model_params = {}
+        try:
+            model_info = predictor.model_info(best_model_name)
+            best_model_params = model_info.get('hyperparameters', {})
+            print(f"Extracted hyperparameters for {best_model_name}")
+        except Exception as e:
+            print(f"Could not extract hyperparameters: {e}")
 
         # Prepare results before the directory is deleted
         results = {
@@ -186,6 +212,7 @@ def run_model_suggestions(
             "leaderboard": leaderboard,
             "best_model_name": best_model_name,
             "best_model_family": best_model_family,
+            "best_model_params": best_model_params,  # Add Zhiqi
             "feature_importance": fi_df,
             "predictor_path": model_path, # Return path in case it needs to be accessed
         }

@@ -14,6 +14,7 @@ from preprocessing_suggestions import (
     suggest_correlation_based_features,
     suggest_feature_combination,
     suggest_fastica_features,
+    suggest_datetime_features,
 )
 
 from preprocessing_registry import FUNC_MAP
@@ -67,6 +68,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ("Missing Values", suggest_missing_value_handling(analysis_results, target_column)),
         ("Duplicate Rows", suggest_duplicate_handling(analysis_results)),
         ("Outliers", suggest_outlier_handling(analysis_results, target_column)),
+        ("Datetime Features", suggest_datetime_features(analysis_results, target_column)),
         ("Numerical Scaling", suggest_numerical_scaling(analysis_results, target_column)),
         ("Correlation-based Features", suggest_correlation_based_features(analysis_results, target_column)),
         ("Feature Combination", suggest_feature_combination(analysis_results, target_column)),
@@ -84,31 +86,105 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         st.session_state.fitted_pipeline = []
         return current_df
 
+    # Store selected suggestions
+    selected_suggestions_list = []
+
     # Show suggestions grouped by type
     for step_name, suggestions in valid_steps:
         with st.expander(f"🔹 {step_name}", expanded=True):
-            for sug in suggestions:
-                st.markdown(f"**Attribute:** `{sug['feature']}`")
-                st.info(f"**Issue:** {sug['issue']}")
-                st.warning(f"**Suggestion:** {sug['suggestion']}")
+            for i, sug in enumerate(suggestions):
+                # Create a unique key for the checkbox
+                key = f"select_{step_name}_{i}"
+                
+                # Checkbox for selection (Default: Checked)
+                col_chk, col_det = st.columns([0.05, 0.95])
+                with col_chk:
+                    is_selected = st.checkbox(
+                        "Select", 
+                        value=True, 
+                        key=key, 
+                        label_visibility="collapsed"
+                    )
+                
+                with col_det:
+                    st.markdown(f"**{sug['suggestion']}**")
+                    st.caption(f"Feature: `{sug['feature']}` | Issue: {sug['issue']}")
+
+                if is_selected:
+                    selected_suggestions_list.append(sug)
+
             st.divider()
+
+        # Special UI for FastICA Tuning
+        if step_name == "FastICA Feature Extraction":
+            st.markdown("#### 🧠 Auto-Tuning (Optional)")
+            st.caption("Optimize the `replace_ratio` using Optuna to find the best balance between original features and ICA components.")
+            
+            col_tune, col_res = st.columns([1, 2])
+            with col_tune:
+                if st.button("Run FastICA Tuning", key="tune_fastica_btn"):
+                    with st.spinner("Tuning FastICA replace_ratio... (this may take a minute)"):
+                        target_col = st.session_state.target_column
+                        if target_col:
+                            # Simple heuristic for model selection
+                            y = current_df[target_col]
+                            is_numeric = pd.api.types.is_numeric_dtype(y)
+                            if is_numeric and y.nunique() > 20:
+                                problem_type = "regression"
+                                model = LinearRegression()
+                            else:
+                                problem_type = "classification"
+                                model = LogisticRegression()
+                                
+                            try:
+                                tuning_results = tune_fastica_replace_ratio(
+                                    df=current_df,
+                                    target_column=target_col,
+                                    model=model,
+                                    problem_type=problem_type,
+                                    n_trials=10
+                                )
+                                best_ratio = tuning_results['best_replace_ratio']
+                                st.session_state.fastica_replace_ratio = best_ratio
+                                st.success(f"Best replace_ratio: {best_ratio:.2f}")
+                            except Exception as e:
+                                st.error(f"Tuning failed: {e}")
+                        else:
+                            st.error("Target column not defined.")
+
+            with col_res:
+                if "fastica_replace_ratio" in st.session_state:
+                    st.info(f"✅ Using tuned ratio: **{st.session_state.fastica_replace_ratio:.2f}**")
 
     # Buttons
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
-        apply_all = col1.button("Apply All Suggestions", key="apply_all_btn")
+        
+        # Count selected
+        n_selected = len(selected_suggestions_list)
+        
+        apply_selected = col1.button(
+            f"Apply Selected Suggestions ({n_selected})", 
+            key="apply_selected_btn",
+            type="primary",
+            disabled=n_selected == 0
+        )
         ignore_all = col2.button("Ignore All Suggestions", key="ignore_all_btn")
 
-        if apply_all:
-            # Build pipeline (raw suggestion list)
+        if apply_selected:
+            # Build pipeline from SELECTED suggestions
             pipeline_to_save = []
-            for _, suggestions in valid_steps:
-                for sug in suggestions:
+            for sug in selected_suggestions_list:
+                if sug.get("function_to_call") is not None:
+                    # Override replace_ratio if tuned
+                    if sug["function_to_call"] == "apply_fastica" and "fastica_replace_ratio" in st.session_state:
+                        sug["kwargs"]["replace_ratio"] = st.session_state.fastica_replace_ratio
+                        
                     pipeline_to_save.append(sug)
 
             st.session_state.transformation_pipeline = pipeline_to_save
 
-            with st.spinner("Applying preprocessing steps..."):
+            with st.spinner(f"Applying {len(pipeline_to_save)} preprocessing steps..."):
                 processed_df, fitted_steps = fit_preprocessing_pipeline(
                     current_df,
                     pipeline_to_save,
