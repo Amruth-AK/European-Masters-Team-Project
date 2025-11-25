@@ -10,10 +10,10 @@ from typing import List
 from analyze import DataAnalyzer, auto_detect_id_columns
 from dashboard import create_dashboard
 from pre_dashboard import run_preprocessing_dashboard
-from model_suggestion import run_model_suggestions
-from feature_selection import select_features_by_importance
-from optuna_tuning import tune_model_with_optuna
-from prediction_page import display_prediction_page
+# from model_suggestion import run_model_suggestions
+# from feature_selection import select_features_by_importance
+# from optuna_tuning import tune_model_with_optuna
+# from prediction_page import display_prediction_page
 
 
 # --- Page Configuration ---
@@ -253,8 +253,9 @@ pages = [
     "Outlier Info",
     "Duplicate Analysis",
     "Preprocessing Suggestions",
-    "Model Suggestions",
-    "Make Predictions",
+    # "Model Suggestions",
+    # "Make Predictions",
+    "Download Preprocessed Data",
 ]
 
 st.sidebar.title("📚 Navigation")
@@ -273,100 +274,104 @@ elif selected_page == "Preprocessing Suggestions":
     else:
         st.warning("⚠️ Please upload a dataset and run the analysis first.")
 
-elif selected_page == "Make Predictions":
-    display_prediction_page()
+# elif selected_page == "Make Predictions":
+#     display_prediction_page()
 
-elif selected_page == "Model Suggestions":
-    if st.session_state.df is not None and st.session_state.target_column:
-        if st.session_state.pre_status not in ["applied", "ignored"]:
-            st.warning(
-                "⚠️ Please finish preprocessing first by applying or ignoring the "
-                "suggestions on the Preprocessing page."
-            )
-        else:
-            st.title("🤖 Model Suggestions")
-            data_for_modeling = (
-                st.session_state.pre_df
-                if st.session_state.pre_df is not None
-                else st.session_state.df
-            )
-            results = st.session_state.get("modeling_results")
-            if results is None:
-                st.info(
-                    "This step will:\n"
-                    "- Identify the best model family using an internal model search\n"
-                    "- Use feature importance to remove irrelevant features\n"
-                    "- Run Optuna to find the best hyperparameters for a pure sklearn model."
-                )
-                if st.button("🚀 Run model search and hyperparameter tuning", use_container_width=True):
-                    target_column = st.session_state.target_column
-                    st.info("🔍 Identifying the best model.")
-                    with st.spinner("Identifying the best model."):
-                        ag_results = run_model_suggestions(
-                            data_for_modeling,
-                            target_column=target_column,
-                        )
-                    st.info("🧬 Selecting most relevant features.")
-                    with st.spinner("Selecting most relevant features."):
-                        reduced_df, selected_features = select_features_by_importance(
-                            df=data_for_modeling,
-                            target_column=target_column,
-                            feature_importance=ag_results.get("feature_importance"),
-                            importance_threshold=0.0,
-                        )
-                    st.info("🎯 Finding the best hyperparameters.")
-                    with st.spinner("Finding the best hyperparameters."):
-                        tuning_results = tune_model_with_optuna(
-                            df=reduced_df,
-                            target_column=target_column,
-                            model_family=ag_results["best_model_family"],
-                            problem_type=ag_results["problem_type"],
-                            eval_metric=ag_results["eval_metric"],
-                            n_trials=30,
-                            time_limit=120,
-                            initial_params=ag_results.get("best_model_params"),
-                        )
-                    st.session_state.modeling_results = {
-                        "problem_type": ag_results["problem_type"],
-                        "eval_metric": ag_results["eval_metric"],
-                        "auto_best_model_name": ag_results["best_model_name"],
-                        "auto_best_model_family": ag_results["best_model_family"],
-                        "selected_features": selected_features,
-                        "tuned_model_family": ag_results["best_model_family"],
-                        "tuned_model_class": tuning_results["best_model_class"],
-                        "tuned_params": tuning_results["best_params"],
-                        "final_model": tuning_results["best_model"],
-                        "eval_score": tuning_results["best_eval_score"],
-                    }
-                    st.success(
-                        "✅ Best model identified and hyperparameters tuned. "
-                        "You can now inspect the results below."
-                    )
-                    results = st.session_state.modeling_results
+# elif selected_page == "Model Suggestions":
+#     if st.session_state.df is not None and st.session_state.target_column:
+#         if st.session_state.pre_status not in ["applied", "ignored"]:
+#             st.warning(
+#                 "⚠️ Please finish preprocessing first by applying or ignoring the "
+#                 "suggestions on the Preprocessing page."
+#             )
+#         else:
+#             st.title("🤖 Model Suggestions")
+#             data_for_modeling = (
+#                 st.session_state.pre_df
+#                 if st.session_state.pre_df is not None
+#                 else st.session_state.df
+#             )
+#             results = st.session_state.get("modeling_results")
+#             if results is None:
+#                 st.info(
+#                     "This step will:\n"
+#                     "- Identify the best model family using an internal model search\n"
+#                     "- Use feature importance to remove irrelevant features\n"
+#                     "- Run Optuna to find the best hyperparameters for a pure sklearn model."
+#                 )
+#                 if st.button("🚀 Run model search and hyperparameter tuning", use_container_width=True):
+#                     target_column = st.session_state.target_column
+#                     st.info("🔍 Identifying the best model.")
+#                     with st.spinner("Identifying the best model."):
+#                         ag_results = run_model_suggestions(
+#                             data_for_modeling,
+#                             target_column=target_column,
+#                         )
+#                     st.info("🧬 Selecting most relevant features.")
+#                     with st.spinner("Selecting most relevant features."):
+#                         reduced_df, selected_features = select_features_by_importance(
+#                             df=data_for_modeling,
+#                             target_column=target_column,
+#                             feature_importance=ag_results.get("feature_importance"),
+#                             importance_threshold=0.0,
+#                         )
+#                     st.info("🎯 Finding the best hyperparameters.")
+#                     with st.spinner("Finding the best hyperparameters."):
+#                         tuning_results = tune_model_with_optuna(
+#                             df=reduced_df,
+#                             target_column=target_column,
+#                             model_family=ag_results["best_model_family"],
+#                             problem_type=ag_results["problem_type"],
+#                             eval_metric=ag_results["eval_metric"],
+#                             n_trials=30,
+#                             time_limit=120,
+#                             initial_params=ag_results.get("best_model_params"),
+#                         )
+#                     st.session_state.modeling_results = {
+#                         "problem_type": ag_results["problem_type"],
+#                         "eval_metric": ag_results["eval_metric"],
+#                         "auto_best_model_name": ag_results["best_model_name"],
+#                         "auto_best_model_family": ag_results["best_model_family"],
+#                         "selected_features": selected_features,
+#                         "tuned_model_family": ag_results["best_model_family"],
+#                         "tuned_model_class": tuning_results["best_model_class"],
+#                         "tuned_params": tuning_results["best_params"],
+#                         "final_model": tuning_results["best_model"],
+#                         "eval_score": tuning_results["best_eval_score"],
+#                     }
+#                     st.success(
+#                         "✅ Best model identified and hyperparameters tuned. "
+#                         "You can now inspect the results below."
+#                     )
+#                     results = st.session_state.modeling_results
 
-            if results is not None:
-                st.subheader("🏁 Final Model")
-                best_model_label = (
-                    results.get("auto_best_model_name")
-                    or results.get("auto_best_model_family")
-                    or "Unknown model"
-                )
-                st.write(f"**Best Model:** `{best_model_label}`")
-                st.write("**Optimal Hyperparameters:**")
-                st.json(results["tuned_params"])
-                eval_metric = (results.get("eval_metric") or "").lower()
-                eval_score = results.get("eval_score", None)
-                if eval_score is not None:
-                    if eval_metric == "roc_auc":
-                        st.write(f"**Validation ROC AUC:** `{eval_score:.4f}`")
-                    elif eval_metric == "root_mean_squared_error":
-                        st.write(f"**Validation RMSE:** `{eval_score:.4f}`")
-                    elif eval_metric == "log_loss":
-                        st.write(f"**Validation log_loss:** `{eval_score:.4f}`")
-                    else:
-                        st.write(f"**Validation score:** `{eval_score:.4f}`")
-    else:
-        st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
+#             if results is not None:
+#                 st.subheader("🏁 Final Model")
+#                 best_model_label = (
+#                     results.get("auto_best_model_name")
+#                     or results.get("auto_best_model_family")
+#                     or "Unknown model"
+#                 )
+#                 st.write(f"**Best Model:** `{best_model_label}`")
+#                 st.write("**Optimal Hyperparameters:**")
+#                 st.json(results["tuned_params"])
+#                 eval_metric = (results.get("eval_metric") or "").lower()
+#                 eval_score = results.get("eval_score", None)
+#                 if eval_score is not None:
+#                     if eval_metric == "roc_auc":
+#                         st.write(f"**Validation ROC AUC:** `{eval_score:.4f}`")
+#                     elif eval_metric == "root_mean_squared_error":
+#                         st.write(f"**Validation RMSE:** `{eval_score:.4f}`")
+#                     elif eval_metric == "log_loss":
+#                         st.write(f"**Validation log_loss:** `{eval_score:.4f}`")
+#                     else:
+#                         st.write(f"**Validation score:** `{eval_score:.4f}`")
+#     else:
+#         st.warning("⚠️ Please upload a dataset and select a target column on the Home page first.")
+        
+elif selected_page == "Download Preprocessed Data":
+    from download_page import run_download_page
+    run_download_page()
 
 else:
     if st.session_state.analysis_results:
