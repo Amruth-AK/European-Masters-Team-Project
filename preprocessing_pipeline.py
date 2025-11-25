@@ -9,8 +9,12 @@ import pandas as pd
 from sklearn.decomposition import FastICA
 from sklearn.preprocessing import StandardScaler
 
-from preprocessing_registry import FUNC_MAP
+from preprocessing_function import (
+    _calculate_intelligent_replace_ratio,
+    _select_features_to_replace
+)
 
+from preprocessing_registry import FUNC_MAP
 
 # ---------------------------------------------------------------------
 #  Train-only vs value-level transformations
@@ -167,6 +171,56 @@ def _transform_scaler_step(df: pd.DataFrame, step: FittedStep):
 
     return df_proc
 
+def _fit_robust_scaler_step(df: pd.DataFrame, name: str, kwargs: Dict[str, Any]):
+    cols = _coerce_to_list(kwargs.get("column"))
+    df_proc = df.copy()
+    q_range = kwargs.get("quantile_range", (25.0, 75.0))
+    q_min, q_max = q_range
+    
+    params = {"stats": {}}
+    
+    for col in cols:
+        if col not in df_proc.columns:
+            continue
+        if not pd.api.types.is_numeric_dtype(df_proc[col]):
+            continue
+            
+        median = float(df_proc[col].median())
+        q1 = float(df_proc[col].quantile(q_min / 100.0))
+        q3 = float(df_proc[col].quantile(q_max / 100.0))
+        iqr = q3 - q1
+        
+        # Apply to train data
+        if iqr == 0:
+            df_proc[col] = df_proc[col] - median
+        else:
+            df_proc[col] = (df_proc[col] - median) / iqr
+            
+        params["stats"][col] = {
+            "median": median,
+            "iqr": iqr
+        }
+
+    fitted = FittedStep(name=name, params=params, kwargs=kwargs)
+    return df_proc, fitted
+
+
+def _transform_robust_scaler_step(df: pd.DataFrame, step: FittedStep):
+    df_proc = df.copy()
+    stats = step.params.get("stats", {})
+    
+    for col, stat in stats.items():
+        if col in df_proc.columns and pd.api.types.is_numeric_dtype(df_proc[col]):
+            median = stat["median"]
+            iqr = stat["iqr"]
+            
+            if iqr == 0:
+                df_proc[col] = df_proc[col] - median
+            else:
+                df_proc[col] = (df_proc[col] - median) / iqr
+                
+    return df_proc
+
 
 # =====================================================================
 #   OUTLIER CLIPPING (fit / transform)
@@ -222,6 +276,81 @@ def _transform_clip_outliers_step(df: pd.DataFrame, step: FittedStep):
             df_proc[col] = df_proc[col].clip(lower=b["lower"], upper=b["upper"])
     return df_proc
 
+
+# =====================================================================
+#   WINSORIZATION (fit / transform)
+# =====================================================================
+
+def _fit_winsorize_step(df: pd.DataFrame, kwargs: Dict[str, Any]):
+    df_proc = df.copy()
+    col = kwargs.get("column")
+    limits = kwargs.get("limits", (0.01, 0.99))
+    
+    params = {}
+    if col in df_proc.columns and pd.api.types.is_numeric_dtype(df_proc[col]):
+        lower = float(df_proc[col].quantile(limits[0]))
+        upper = float(df_proc[col].quantile(limits[1]))
+        params = {"lower": lower, "upper": upper}
+        df_proc[col] = df_proc[col].clip(lower=lower, upper=upper)
+        
+    fitted = FittedStep(name="winsorize_column", params=params, kwargs=kwargs)
+    return df_proc, fitted
+
+def _transform_winsorize_step(df: pd.DataFrame, step: FittedStep):
+    df_proc = df.copy()
+    col = step.kwargs.get("column")
+    lower = step.params.get("lower")
+    upper = step.params.get("upper")
+    
+    if col in df_proc.columns and lower is not None and upper is not None:
+        df_proc[col] = df_proc[col].clip(lower=lower, upper=upper)
+        
+    return df_proc
+
+
+# =====================================================================
+#   POWER TRANSFORM (fit / transform)
+# =====================================================================
+
+def _fit_power_transform_step(df: pd.DataFrame, kwargs: Dict[str, Any]):
+    from sklearn.preprocessing import PowerTransformer
+    df_proc = df.copy()
+    col = kwargs.get("column")
+    method = kwargs.get("method", "yeo-johnson")
+    
+    params = {}
+    if col in df_proc.columns and pd.api.types.is_numeric_dtype(df_proc[col]):
+        # Fit logic
+        pt = PowerTransformer(method=method, standardize=False)
+        vals = df_proc[col].dropna().values.reshape(-1, 1)
+        
+        if len(vals) > 0:
+            pt.fit(vals)
+            # Apply to current df
+            mask = df_proc[col].notna()
+            if mask.sum() > 0:
+                transformed = pt.transform(df_proc.loc[mask, col].values.reshape(-1, 1)).flatten()
+                df_proc.loc[mask, col] = transformed
+            params = {"model": pt}
+
+    fitted = FittedStep(name="apply_power_transform", params=params, kwargs=kwargs)
+    return df_proc, fitted
+
+def _transform_power_transform_step(df: pd.DataFrame, step: FittedStep):
+    df_proc = df.copy()
+    col = step.kwargs.get("column")
+    pt = step.params.get("model")
+    
+    if col in df_proc.columns and pt is not None:
+        mask = df_proc[col].notna()
+        if mask.sum() > 0:
+            try:
+                vals = df_proc.loc[mask, col].values.reshape(-1, 1)
+                df_proc.loc[mask, col] = pt.transform(vals).flatten()
+            except Exception:
+                pass 
+                
+    return df_proc
 
 # =====================================================================
 #   CORRELATION-BASED FEATURES (fit / transform)
@@ -291,22 +420,75 @@ def _fit_corr_features_step(
     features: List[Dict[str, Any]] = []
 
     for new_col in new_cols:
-        op, col1, col2 = _decode_corr_feature_name(new_col)
-        if op is None or col1 not in base_df.columns or col2 not in base_df.columns:
-            # If we cannot decode, skip recording; the column will still exist in df_proc
+        # Robust decoding: try all patterns and all split positions
+        found_match = False
+        best_op = None
+        best_c1 = None
+        best_c2 = None
+        
+        # Patterns from _decode_corr_feature_name
+        patterns = [
+            ("product", "_x_"),
+            ("ratio", "_div_"),
+            ("difference", "_minus_"),
+            ("sum", "_plus_"),
+            ("interaction", "_interact_"),
+        ]
+        
+        valid_cols = set(df_proc.columns)
+        
+        for op, token in patterns:
+            if token not in new_col:
+                continue
+                
+            # Try splitting at every occurrence of the token
+            parts = new_col.split(token)
+            # We need to reconstruct c1 and c2 from parts
+            # e.g. A_x_B_x_C with token _x_ -> parts [A, B, C]
+            # Split could be (A, B_x_C) or (A_x_B, C)
+            
+            # Optimization: The generator usually puts the complex feature first (A_x_B) and simple second (C)
+            # So we iterate splits.
+            # However, simple split(token) consumes ALL tokens.
+            # We want to find a partition.
+            
+            # Let's use string find/rfind approach
+            start = 0
+            while True:
+                idx = new_col.find(token, start)
+                if idx == -1:
+                    break
+                
+                c1 = new_col[:idx]
+                c2 = new_col[idx + len(token):]
+                
+                if c1 in valid_cols and c2 in valid_cols:
+                    best_op = op
+                    best_c1 = c1
+                    best_c2 = c2
+                    found_match = True
+                    break
+                
+                start = idx + len(token)
+            
+            if found_match:
+                break
+        
+        if not found_match:
             continue
 
         feat_spec: Dict[str, Any] = {
             "name": new_col,
-            "op": op,
-            "col1": col1,
-            "col2": col2,
+            "op": best_op,
+            "col1": best_c1,
+            "col2": best_c2,
         }
 
-        if op == "interaction":
+        if best_op == "interaction":
             # Store training means so we can use the same centering on test
-            feat_spec["col1_mean"] = float(base_df[col1].mean())
-            feat_spec["col2_mean"] = float(base_df[col2].mean())
+            # Use df_proc because c1/c2 might be newly created features (not in base_df)
+            feat_spec["col1_mean"] = float(df_proc[best_c1].mean())
+            feat_spec["col2_mean"] = float(df_proc[best_c2].mean())
 
         features.append(feat_spec)
 
@@ -442,6 +624,41 @@ def _fit_fastica_step(
     for i, cname in enumerate(component_names):
         df_proc[cname] = S[:, i]
 
+    # 5) Handle mode (hybrid/replace/add)
+    mode = kwargs.get("mode", "hybrid")
+    replace_ratio = kwargs.get("replace_ratio")
+    
+    cols_to_drop = []
+    
+    if mode == 'replace':
+        cols_to_drop = numerical_cols
+        print(f"[_fit_fastica_step] Mode 'replace': Dropping {len(cols_to_drop)} original features.")
+        
+    elif mode == 'hybrid':
+        # Calculate ratio if not provided
+        if replace_ratio is None:
+            replace_ratio = _calculate_intelligent_replace_ratio(
+                df_proc,
+                numerical_cols,
+                n_components,
+                analysis_results=analysis_results
+            )
+            
+        # Identify features to replace
+        n_to_replace = int(len(numerical_cols) * replace_ratio)
+        cols_to_replace, cols_to_keep = _select_features_to_replace(
+            df_proc,
+            numerical_cols,
+            n_to_replace,
+            analysis_results
+        )
+        cols_to_drop = cols_to_replace
+        print(f"[_fit_fastica_step] Mode 'hybrid': Dropping {len(cols_to_drop)} features (ratio={replace_ratio:.2f}).")
+        
+    # Apply drops
+    if cols_to_drop:
+        df_proc = df_proc.drop(columns=cols_to_drop)
+
     fitted = FittedStep(
         name="apply_fastica",
         params={
@@ -449,6 +666,7 @@ def _fit_fastica_step(
             "scaler": scaler,
             "ica": ica,
             "component_names": component_names,
+            "cols_to_drop": cols_to_drop, # Store dropped columns to replicate on test
         },
         kwargs=kwargs,
     )
@@ -492,7 +710,59 @@ def _transform_fastica_step(df: pd.DataFrame, step: FittedStep):
     for i, cname in enumerate(component_names):
         df_proc[cname] = S[:, i]
 
+    # Drop columns if specified (for hybrid/replace mode)
+    cols_to_drop = params.get("cols_to_drop", [])
+    if cols_to_drop:
+        # Only drop columns that exist
+        existing_drops = [c for c in cols_to_drop if c in df_proc.columns]
+        if existing_drops:
+            df_proc = df_proc.drop(columns=existing_drops)
+
     return df_proc
+
+
+# =====================================================================
+#   INDICATORS (fit / transform)
+# =====================================================================
+
+def _fit_indicator_step(df: pd.DataFrame, kwargs: Dict[str, Any]):
+    """
+    Fit: Record which columns we are adding indicators for.
+    Apply: Add the indicators to the training data.
+    """
+    df_proc = df.copy()
+    cols = _coerce_to_list(kwargs.get("columns"))
+    
+    # Verify columns exist
+    valid_cols = [c for c in cols if c in df_proc.columns]
+    
+    for col in valid_cols:
+        df_proc[f"{col}_is_missing"] = df_proc[col].isnull().astype(int)
+        
+    fitted = FittedStep(name="add_missing_indicator", params={"columns": valid_cols}, kwargs=kwargs)
+    return df_proc, fitted
+
+def _transform_indicator_step(df: pd.DataFrame, step: FittedStep):
+    """
+    Transform: Add the same indicator columns. 
+    If source column has no NaNs in test, indicator is all 0s.
+    """
+    df_proc = df.copy()
+    cols = step.params.get("columns", [])
+    
+    for col in cols:
+        if col in df_proc.columns:
+            df_proc[f"{col}_is_missing"] = df_proc[col].isnull().astype(int)
+        else:
+            # Edge case: Source column missing? Fill with 0s or skip?
+            # Better to skip or fill 0. Let's fill 0 to maintain shape if possible, 
+            # but usually safe to skip if source is gone.
+            pass
+            
+    return df_proc
+
+
+
 
 
 # =====================================================================
@@ -535,13 +805,46 @@ def fit_preprocessing_pipeline(
             kwargs.setdefault("analysis_results", analysis_results)
 
         # --- Stateful handlers ---
-        if name in ("impute_mean", "impute_median", "impute_mode"):
-            df_proc, fitted = _fit_imputer_step(df_proc, name, kwargs)
+        if name in ("impute_mean", "impute_median", "impute_mode", "impute_constant"):
+            # Special handling for constant to pass fill_value into mapping
+            if name == "impute_constant":
+                # Reuse _fit_imputer_step logic but inject constant
+                cols = _coerce_to_list(kwargs.get("columns"))
+                val = kwargs.get("fill_value", -1)
+                df_proc = df_proc.copy()
+                mapping = {c: val for c in cols if c in df_proc.columns}
+                for c, v in mapping.items():
+                    df_proc[c] = df_proc[c].fillna(v)
+                fitted_steps.append(FittedStep(name=name, params={"values": mapping}, kwargs=kwargs))
+            else:
+                df_proc, fitted = _fit_imputer_step(df_proc, name, kwargs)
+                fitted_steps.append(fitted)
+            continue
+
+        # --- ADD INDICATOR BLOCK ---
+        if name == "add_missing_indicator": # <--- NEW
+            df_proc, fitted = _fit_indicator_step(df_proc, kwargs)
             fitted_steps.append(fitted)
             continue
 
+
         if name in ("standard_scaler", "minmax_scaler"):
             df_proc, fitted = _fit_scaler_step(df_proc, name, kwargs)
+            fitted_steps.append(fitted)
+            continue
+        
+        if name == "robust_scaler": # <--- NEW
+            df_proc, fitted = _fit_robust_scaler_step(df_proc, name, kwargs)
+            fitted_steps.append(fitted)
+            continue
+
+        if name == "winsorize_column": # <--- NEW
+            df_proc, fitted = _fit_winsorize_step(df_proc, kwargs)
+            fitted_steps.append(fitted)
+            continue
+
+        if name == "apply_power_transform": # <--- NEW
+            df_proc, fitted = _fit_power_transform_step(df_proc, kwargs)
             fitted_steps.append(fitted)
             continue
 
@@ -558,6 +861,19 @@ def fit_preprocessing_pipeline(
         if name == "apply_fastica":
             df_proc, fitted = _fit_fastica_step(df_proc, kwargs, analysis_results)
             fitted_steps.append(fitted)
+            continue
+
+        if name == "combine_categorical_features":
+            # This is a stateless transform, but we need to record it to replay it
+            # It doesn't learn parameters, but it changes the schema.
+            # We treat it as a "stateless" step that is just re-executed.
+            try:
+                func = FUNC_MAP.get(name)
+                df_proc = func(df_proc, **kwargs)
+                fitted_steps.append(FittedStep(name=name, params={}, kwargs=kwargs))
+            except Exception as e:
+                print(f"[fit_preprocessing_pipeline] Error in {name}: {e}")
+                fitted_steps.append(FittedStep(name=name, params={}, kwargs=kwargs))
             continue
 
         # --- Train-only row-removal steps ---
@@ -621,12 +937,30 @@ def apply_fitted_pipeline(
             kwargs.setdefault("analysis_results", analysis_results)
 
         # --- Stateful handlers ---
-        if name in ("impute_mean", "impute_median", "impute_mode"):
+        if name in ("impute_mean", "impute_median", "impute_mode", "impute_constant"):
             df_proc = _transform_imputer_step(df_proc, step)
             continue
 
+        # --- ADD INDICATOR BLOCK ---
+        if name == "add_missing_indicator": 
+            df_proc = _transform_indicator_step(df_proc, step)
+            continue
+
+
         if name in ("standard_scaler", "minmax_scaler"):
             df_proc = _transform_scaler_step(df_proc, step)
+            continue
+
+        if name == "robust_scaler": # <--- NEW
+            df_proc = _transform_robust_scaler_step(df_proc, step)
+            continue
+
+        if name == "winsorize_column": # <--- NEW
+            df_proc = _transform_winsorize_step(df_proc, step)
+            continue
+            
+        if name == "apply_power_transform": # <--- NEW
+            df_proc = _transform_power_transform_step(df_proc, step)
             continue
 
         if name == "clip_outliers_iqr":
@@ -641,7 +975,17 @@ def apply_fitted_pipeline(
             df_proc = _transform_fastica_step(df_proc, step)
             continue
 
+        elif name == "combine_categorical_features":
+            func = FUNC_MAP.get(name)
+            if func:
+                try:
+                    df_proc = func(df_proc, **kwargs)
+                except Exception as e:
+                    print(f"[apply_fitted_pipeline] Error in {name}: {e}")
+            continue
+
         # --- Default: stateless re-apply ---
+        # Generic fallback for stateless transforms (if any others exist)
         func = FUNC_MAP.get(name)
         if func is not None:
             try:

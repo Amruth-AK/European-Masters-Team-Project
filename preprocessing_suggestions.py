@@ -1,97 +1,104 @@
 import numpy as np
 import pandas as pd
 import itertools
+from preprocessing_registry import FUNC_MAP, decide_correlation_threshold, assess_ica_necessity
 
 def suggest_missing_value_handling(analysis_results: dict, target_column: str = None) -> list:
     """
-    Generate handling suggestions for missing values based on analysis results.
-
-    Args:
-        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
-        target_column: Name of the target column to skip or deal with differently.
-
-    Returns:
-        list: Preprocessing suggestions for missing value imputation or deletion.
+    Generate robust missing value suggestions.
+    
+    Revised Strategy for High-Risk Data:
+    1. NEVER drop columns unless empty (>99%).
+    2. High Missing (>30%): Impute Adaptive Constant + Indicator.
+       (Calculates a constant strictly outside the data range).
+    3. Low Missing (<=30%): Impute Median + Indicator.
     """
     suggestions = []
 
     missing_info = analysis_results.get('missing_values', {})
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
+    # Get stats to find min/max for safe constants
+    desc_stats = analysis_results.get('descriptive_statistics', {})
 
     for col, info in missing_info.items():
         missing_pct = info.get('missing_percentage', 0)
-        missing_count = info.get('missing_count', 0)
         dtype = data_types.get(col, '')
         
-        if col == target_column:
-            # Skip target column suggestions for now
+        if col == target_column or missing_pct == 0:
             continue
 
-        if missing_pct == 0:
-            continue
-
-        # --- Rule 1: High missingness (>50%) — delete column
-        if missing_pct > 50:
+        # --- Rule 1: Empty Columns (>99%) -> Drop
+        if missing_pct > 99:
             suggestions.append({
                 'feature': col,
-                'issue': f'{missing_pct:.2f}% missing values (too high)',
-                'suggestion': 'Column has excessive missing values; consider dropping it.',
+                'issue': f'{missing_pct:.2f}% missing values (effectively empty).',
+                'suggestion': 'Drop column.',
                 'function_to_call': 'delete_missing_columns',
-                'kwargs': {'threshold': 0.5}
+                'kwargs': {'threshold': 0.99}
             })
+            continue
 
-        # --- Rule 2: Moderate missingness (20–50%) — impute intelligently
-        elif 20 < missing_pct <= 50:
+        # --- Always Suggest Indicator ---
+        suggestions.append({
+            'feature': col,
+            'issue': f'{missing_pct:.2f}% missing. Missingness pattern might be predictive.',
+            'suggestion': 'Add "Is Missing" indicator.',
+            'function_to_call': 'add_missing_indicator',
+            'kwargs': {'columns': col}
+        })
+
+        # --- Rule 2: High Missingness (>30%) -> Adaptive Constant
+        if missing_pct > 30:
+            if 'float' in dtype or 'int' in dtype:
+                # Calculate safe constant
+                col_stats = desc_stats.get(col, {})
+                min_val = col_stats.get('min')
+                
+                # Default to -999 if stats are missing or min >= 0
+                fill_value = -999
+                
+                if min_val is not None:
+                    # If data goes below -900, we need a lower constant
+                    if min_val < -900:
+                        # Move 1000 units below the minimum to be safe
+                        fill_value = float(int(min_val) - 1000)
+                
+                suggestions.append({
+                    'feature': col,
+                    'issue': f'High missingness ({missing_pct:.2f}%). Median imputation might distort distribution.',
+                    'suggestion': f'Impute with Constant ({fill_value}). This value is outside the data range (Min: {min_val}), isolating missing values for tree models.',
+                    'function_to_call': 'impute_constant',
+                    'kwargs': {'columns': col, 'fill_value': fill_value}
+                })
+            else:
+                suggestions.append({
+                    'feature': col,
+                    'issue': f'High missingness ({missing_pct:.2f}%) in categorical feature.',
+                    'suggestion': 'Impute with Constant "Unknown".',
+                    'function_to_call': 'impute_constant',
+                    'kwargs': {'columns': col, 'fill_value': 'Unknown'}
+                })
+
+        # --- Rule 3: Low/Moderate Missingness (<=30%) -> Median/Mode
+        else:
             if 'float' in dtype or 'int' in dtype:
                 suggestions.append({
                     'feature': col,
-                    'issue': f'{missing_pct:.2f}% missing numeric data',
-                    'suggestion': 'Use median imputation to handle moderate missing values.',
+                    'issue': f'Moderate missingness ({missing_pct:.2f}%).',
+                    'suggestion': 'Impute with Median (robust to outliers).',
                     'function_to_call': 'impute_median',
                     'kwargs': {'columns': col}
                 })
             else:
                 suggestions.append({
                     'feature': col,
-                    'issue': f'{missing_pct:.2f}% missing categorical data',
-                    'suggestion': 'Use mode imputation to fill missing categorical values.',
+                    'issue': f'Moderate missingness ({missing_pct:.2f}%).',
+                    'suggestion': 'Impute with Mode.',
                     'function_to_call': 'impute_mode',
                     'kwargs': {'columns': col}
                 })
-
-        # --- Rule 3: Low missingness (<=20%) — simple imputation
-        else:
-            if 'float' in dtype or 'int' in dtype:
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'Low missingness ({missing_pct:.2f}%) detected',
-                    'suggestion': 'Use mean imputation for small missing value percentages.',
-                    'function_to_call': 'impute_mean',
-                    'kwargs': {'columns': col}
-                })
-            else:
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'Low missingness ({missing_pct:.2f}%) detected in categorical feature',
-                    'suggestion': 'Use mode imputation for categorical columns.',
-                    'function_to_call': 'impute_mode',
-                    'kwargs': {'columns': col}
-                })
-
-    # Optional: check row-level missingness across the dataset
-    total_missing_rows = sum(1 for row in analysis_results.get('missing_values', {}).values()
-                             if row.get('missing_count', 0) > 0)
-    if total_missing_rows > 0:
-        suggestions.append({
-            'feature': 'rows',
-            'issue': 'Some rows contain multiple missing values.',
-            'suggestion': 'Consider deleting rows with more than 50% missing data.',
-            'function_to_call': 'delete_missing_rows',
-            'kwargs': {'threshold': 0.5}
-        })
 
     return suggestions
-
 
 def suggest_duplicate_handling(analysis_results: dict) -> list:
     """
@@ -151,65 +158,48 @@ def suggest_duplicate_handling(analysis_results: dict) -> list:
 
 def suggest_numerical_scaling(analysis_results: dict, target_column: str = None) -> list:
     """
-    Generate scaling suggestions for numerical features based on analysis results.
-    
-    Args:
-        analysis_results: Dictionary from Adrian's analysis() function
-        target_column: Name of the target column to skip or deal with differently.
-    
-    Returns:
-        list: Preprocessing suggestions for numerical scaling
+    Generate scaling suggestions. Prefer RobustScaler if outliers exist.
     """
     suggestions = []
     
-    # Get data types to identify numerical columns
+    # Get info
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
-    numerical_cols = [col for col, dtype in data_types.items() 
-                     if 'int' in dtype or 'float' in dtype]
-    
-    # Get distribution info (skewness)
+    outlier_info = analysis_results.get('outlier_info', {})
     distributions = analysis_results.get('distributions', {})
     
-    # Get outlier info
-    outlier_info = analysis_results.get('outlier_info', {})
+    numerical_cols = [col for col, dtype in data_types.items() 
+                     if ('int' in dtype or 'float' in dtype) and col != target_column]
     
     for col in numerical_cols:
-        # Get skewness for this column
+        outlier_count = outlier_info.get(col, {}).get('outlier_count', 0)
         skewness = distributions.get(col, {}).get('skewness', 0)
         
-        # Check if column has outliers
-        has_outliers = outlier_info.get(col, {}).get('outlier_count', 0) > 0
-        
-        if col == target_column:
-            # Skip target column suggestions for now
-            continue
-        
-        # Rule 1: High skewness (>1 or <-1) -> use standard scaler
-        if abs(skewness) > 1:
+        # Rule 1: Outliers Detected -> Robust Scaler
+        if outlier_count > 0:
             suggestions.append({
                 'feature': col,
-                'issue': f'High skewness detected ({skewness:.2f})',
-                'suggestion': 'Apply standard scaling (z-score normalization) to normalize distribution.',
+                'issue': f'Contains {outlier_count} outliers. Standard scaling would be distorted.',
+                'suggestion': 'Apply Robust Scaling (based on IQR). This scales data effectively while ignoring extreme outliers, crucial for subsequent feature engineering.',
+                'function_to_call': 'robust_scaler',
+                'kwargs': {'column': col, 'quantile_range': (25.0, 75.0)}
+            })
+            
+        # Rule 2: High Skew, No Outliers -> Standard Scaler (Center data)
+        elif abs(skewness) > 1:
+            suggestions.append({
+                'feature': col,
+                'issue': 'High skewness but no extreme outliers.',
+                'suggestion': 'Apply Standard Scaling (Z-score) to center the data.',
                 'function_to_call': 'standard_scaler',
                 'kwargs': {'column': col}
             })
-        
-        # Rule 2: Low skewness and no outliers -> use minmax scaler
-        elif not has_outliers:
-            suggestions.append({
-                'feature': col,
-                'issue': 'Numerical feature requires scaling for model compatibility',
-                'suggestion': 'Apply min-max scaling to transform values to [0,1] range.',
-                'function_to_call': 'minmax_scaler',
-                'kwargs': {'column': col, 'feature_range': (0, 1)}
-            })
-        
-        # Rule 3: Has outliers but low skewness -> still recommend minmax but warn
+            
+        # Rule 3: Normal-ish -> MinMax
         else:
             suggestions.append({
                 'feature': col,
-                'issue': 'Numerical feature with some outliers detected',
-                'suggestion': 'Apply min-max scaling after handling outliers.',
+                'issue': 'Data is relatively uniform.',
+                'suggestion': 'Apply Min-Max scaling to map to [0,1].',
                 'function_to_call': 'minmax_scaler',
                 'kwargs': {'column': col, 'feature_range': (0, 1)}
             })
@@ -219,44 +209,45 @@ def suggest_numerical_scaling(analysis_results: dict, target_column: str = None)
 
 def suggest_outlier_handling(analysis_results: dict, target_column: str = None) -> list:
     """
-    Generate outlier handling suggestions based on analysis results.
-    
-    Args:
-        analysis_results: Dictionary from Adrian's analysis() function
-        target_column: Name of the target column to skip or deal with differently.
-    
-    Returns:
-        list: Preprocessing suggestions for outlier handling
+    Generate outlier suggestions.
+    High Skew (>2.0) -> Yeo-Johnson
+    Moderate Skew/Outliers -> Winsorization
     """
     suggestions = []
     
-    # Get outlier information from Adrian's analysis
     outlier_info = analysis_results.get('outlier_info', {})
+    distributions = analysis_results.get('distributions', {})
     
     for col, info in outlier_info.items():
-        outlier_count = info.get('outlier_count', 0)
-        outlier_percentage = info.get('outlier_percentage', 0)
-        
         if col == target_column:
-            # Skip target column suggestions for now
             continue
         
-        # Only suggest if outliers exist
-        if outlier_count > 0:
+        outlier_count = info.get('outlier_count', 0)
+        if outlier_count == 0:
+            continue
             
-            # --- MODIFIED LOGIC ---
-            # ALWAYS suggest clipping to avoid accidentally deleting too many rows in wide datasets.
-            # The original logic that suggested removal for high outlier percentages is too risky.
-            
+        skewness = distributions.get(col, {}).get('skewness', 0)
+        
+        # Rule 1: Extreme Skewness (> 2.0) -> Power Transform
+        if abs(skewness) > 2.0:
             suggestions.append({
                 'feature': col,
-                'issue': f'Contains {outlier_count} outliers ({outlier_percentage:.2f}% of data)',
-                'suggestion': 'Clip outliers to the IQR boundaries. This contains extreme values without deleting rows, which is safer for datasets with many columns.',
-                'function_to_call': 'clip_outliers_iqr',  # Always use clip
-                'kwargs': {'column': col, 'whisker_width': 1.5, 'analysis_results': analysis_results}
+                'issue': f'High skewness ({skewness:.2f}) and {outlier_count} outliers detected.',
+                'suggestion': 'Apply Yeo-Johnson transformation. This compresses tails and handles outliers better than clipping for skewed financial data.',
+                'function_to_call': 'apply_power_transform',
+                'kwargs': {'column': col, 'method': 'yeo-johnson'}
             })
             
-    
+        # Rule 2: Outliers exist but not super skewed -> Winsorization
+        else:
+            suggestions.append({
+                'feature': col,
+                'issue': f'Feature contains {outlier_count} outliers.',
+                'suggestion': 'Apply Winsorization (capping at 1st and 99th percentiles). This limits extreme values without removing data points.',
+                'function_to_call': 'winsorize_column',
+                'kwargs': {'column': col, 'limits': (0.01, 0.99)}
+            })
+            
     return suggestions
 
 
@@ -455,40 +446,12 @@ def suggest_datetime_features(analysis_results: dict, target_column: str = None)
     
     return suggestions    
 
-def decide_correlation_threshold(all_corrs, method='percentile', percentile=75):
-    """
-    Decide an adaptive correlation threshold based on the distribution of correlations.
-
-    Parameters:
-        all_corrs (list): List of absolute correlation values between features.
-        method (str): 'percentile' or 'iqr' for threshold calculation.
-        percentile (float): Percentile to use if method='percentile'.
-
-    Returns:
-        threshold (float): Suggested threshold.
-    """
-    if not all_corrs:
-        return 0.0
-
-    all_corrs = np.array(all_corrs)
-
-    if method == 'percentile':
-        threshold = np.percentile(all_corrs, percentile)
-    elif method == 'iqr':
-        q1 = np.percentile(all_corrs, 25)
-        q3 = np.percentile(all_corrs, 75)
-        threshold = min(q3 + 1.5 * (q3 - q1), 1.0)
-    else:
-        raise ValueError("Unsupported method. Choose 'percentile' or 'iqr'.")
-
-    # Avoid thresholds that are too low
-    return max(threshold, 0.1)
+# Add Zhiqi-feature combination
 
 
 def suggest_correlation_based_features(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate suggestions for creating new features from highly correlated feature pairs.
-    Adaptively adjusts threshold based on actual correlation distribution.
     """
     suggestions = []
 
@@ -507,7 +470,7 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
     if target_column is not None:
         corr_matrix = corr_matrix.drop(index=target_column, columns=target_column, errors='ignore')
 
-    # Identify numerical columns (excluding ID-like columns)
+    # Identify numerical columns
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
     numerical_cols = [
         col for col, dtype in data_types.items()
@@ -515,29 +478,30 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
     ]
     id_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
     numerical_cols = [col for col in numerical_cols if not any(k in col.lower() for k in id_keywords)]
-
-    if len(numerical_cols) < 2:
+    
+    # Filter matrix to only valid numerical columns
+    valid_cols = [c for c in numerical_cols if c in corr_matrix.index]
+    if len(valid_cols) < 2:
         return suggestions
+        
+    corr_matrix = corr_matrix.loc[valid_cols, valid_cols]
 
-    # Collect all absolute correlations (excluding diagonal)
-    all_corrs = []
-    for i, col1 in enumerate(numerical_cols):
-        if col1 not in corr_matrix.index:
-            continue
-        for col2 in numerical_cols[i + 1:]:
-            if col2 not in corr_matrix.columns:
-                continue
-            corr_value = corr_matrix.loc[col1, col2]
-            if pd.notna(corr_value) and -1 <= corr_value <= 1:
-                all_corrs.append(abs(corr_value))
+    # [Optimization] Vectorized collection of absolute correlations
+    # Instead of nested loops, we use numpy upper triangle indices
+    mask = np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
+    all_corrs = corr_matrix.where(mask).stack().abs().tolist()
 
     if not all_corrs:
         return suggestions
 
     # Adaptive threshold
-    correlation_threshold = decide_correlation_threshold(all_corrs, method='percentile', percentile=75)
+    correlation_threshold = decide_correlation_threshold(
+        all_corrs, 
+        method='auto', 
+        min_threshold=0.1
+    )
 
-    # Decide strategy and feature types
+    # Decide strategy
     if correlation_threshold < 0.2:
         strategy = "all_pairs"
         feature_types = ['product', 'ratio']
@@ -551,51 +515,56 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
         strategy = "high_correlation"
         feature_types = ['product', 'ratio', 'difference', 'sum']
 
-    # Filter high-correlation pairs
-    high_corr_pairs = []
-    for i, col1 in enumerate(numerical_cols):
-        if col1 not in corr_matrix.index:
-            continue
-        for col2 in numerical_cols[i + 1:]:
-            if col2 not in corr_matrix.columns:
-                continue
-            corr_value = corr_matrix.loc[col1, col2]
-            if pd.notna(corr_value) and -1 <= corr_value <= 1:
-                if abs(corr_value) >= correlation_threshold:
-                    high_corr_pairs.append((col1, col2, corr_value))
-
-    if not high_corr_pairs:
+    # Filter high-correlation pairs for preview
+    # (We only need top 10 for the message, so we don't need to collect ALL of them here manually)
+    # Let's just grab the top ones from our vectorized data for the preview
+    corr_series = corr_matrix.where(mask).stack()
+    high_corr_series = corr_series[corr_series.abs() >= correlation_threshold]
+    
+    # Sort by absolute value descending
+    high_corr_series = high_corr_series.iloc[np.argsort(-high_corr_series.abs().values)]
+    
+    num_high_pairs = len(high_corr_series)
+    if num_high_pairs == 0:
         return suggestions
 
-    # Adaptive max_new_features based on dataset size
+    # Adaptive max_new_features
     shape = analysis_results.get('general_info', {}).get('shape', [0, 0])
     n_samples = shape[0] if shape else 0
+    n_features = shape[1] if shape else 0
+    
     if strategy == "all_pairs":
-        max_new_features = 10 if n_samples < 1000 else 20 if n_samples < 10000 else 30
+        max_new_features = min(n_samples // 15, n_features, 100)
+        max_new_features = max(20, max_new_features)
     else:
-        max_new_features = 30 if n_samples < 1000 else 60 if n_samples < 10000 else 120
+        max_new_features = min(n_samples // 10, n_features * 2, 200)
+        max_new_features = max(50, max_new_features)
+    
+    print(f"📊 [Suggestion] Threshold: {correlation_threshold:.3f} | Strategy: {strategy} | Limit: {max_new_features}")
 
-    # Create suggestion messages
-    median_corr = np.median(all_corrs)
+    # Create preview string
+    top_pairs_preview = []
+    for (col1, col2), val in high_corr_series.head(10).items():
+        top_pairs_preview.append(f"- {col1} & {col2} (corr={val:.2f})")
+    
+    preview_str = "\n".join(top_pairs_preview)
+    if num_high_pairs > 10:
+        preview_str += f"\n- ... and {num_high_pairs - 10} more pairs"
+
     if strategy == "all_pairs":
         issue_msg = (
-            f"Very low correlations detected (max: {max(all_corrs):.2f}, median: {median_corr:.2f}). "
-            f"Suggesting interaction features from all {len(high_corr_pairs)} feature pairs "
-            f"to explore non-linear relationships."
+            f"Very low correlations detected (max: {max(all_corrs):.2f}). "
+            f"Suggesting interaction features from all {num_high_pairs} feature pairs."
         )
         suggestion_msg = (
-            f"Even with low correlations, interaction features (A*B, A/B, etc.) can capture "
-            f"non-linear patterns that linear correlation misses. This will generate features "
-            f"from all {len(high_corr_pairs)} feature pairs."
+            f"Even with low correlations, interaction features can capture non-linear patterns.\n"
+            f"**Top feature pairs to be combined:**\n{preview_str}"
         )
     else:
-        issue_msg = (
-            f"Found {len(high_corr_pairs)} pairs with |corr| >= {correlation_threshold:.2f} "
-            f"(max correlation: {max(all_corrs):.2f}, median: {median_corr:.2f})"
-        )
+        issue_msg = f"Found {num_high_pairs} pairs with |corr| >= {correlation_threshold:.2f}"
         suggestion_msg = (
-            f"Create interaction features from {len(high_corr_pairs)} feature pairs "
-            f"with |correlation| >= {correlation_threshold:.2f} to capture non-linear relationships."
+            f"Create interaction features from {num_high_pairs} feature pairs.\n"
+            f"**Top feature pairs to be combined:**\n{preview_str}"
         )
 
     suggestions.append({
@@ -608,31 +577,31 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
             'feature_types': feature_types,
             'use_basic_filter': True,
             'use_correlation_filter': True,
-            'min_cardinality': 4,
+            'min_cardinality': 3,
             'max_new_features': max_new_features,
-            'corr_filter_threshold': 0.9,
-            'min_variance': 1e-4,
-            'target_column': target_column
+            'corr_filter_threshold': 0.92,
+            'min_variance': 1e-5,
+            'target_column': target_column,
+            'generate_third_order': True,
+            'min_second_for_third': 15,
+            'max_third_order_features': 30,
+            'top_second_for_third': 50,
+            'top_original_for_third': 30
         }
     })
 
     return suggestions
 
+
 def suggest_feature_combination(
     analysis_results: dict,
     target_column: str = None,
-    max_pairs: int = 9999,          # not a real cap anymore; budget controls the stop
-    memory_growth_cap: float = 0.25 # allow at most +25% more columns (as a proxy for memory)
+    max_pairs: int = 9999,
+    memory_growth_cap: float = 0.25
 ) -> list:
     """
-    Adaptive categorical feature-combination suggestions with a data-driven threshold.
-
-    Budget logic (stop-conditions):
-      1) Column budget from samples: total_new_columns <= min(n_samples/5, 2000)
-      2) Column budget from memory proxy: total_new_columns <= current_cols * memory_growth_cap
-      3) Always respect whichever budget is smaller.
+    Adaptive categorical feature-combination suggestions.
     """
-    import itertools
     suggestions = []
 
     cat_info = analysis_results.get("categorical_info", {})
@@ -640,50 +609,35 @@ def suggest_feature_combination(
     shape = analysis_results.get("general_info", {}).get("shape", [0, 0])
     n_rows, n_cols = shape if isinstance(shape, (list, tuple)) else (0, 0)
 
-    # ---- 1) Eligible categorical columns by cardinality & type ----
     def is_cat(col):
         t = dtypes.get(col, "")
         return ("object" in t) or ("category" in t)
 
     eligible = []
     for col, info in cat_info.items():
-        if col == target_column:
-            continue
-        if not is_cat(col):
-            continue
+        if col == target_column: continue
+        if not is_cat(col): continue
         uv = info.get("unique_values", 0)
-        # Keep moderate-cardinality only (avoid too tiny/too huge)
-        if 2 <= uv <= 30:
-            eligible.append(col)
+        if 2 <= uv <= 30: eligible.append(col)
 
-    if len(eligible) < 2:
-        return suggestions
+    if len(eligible) < 2: return suggestions
 
-    # ---- 2) Rank pairs by estimated joint cardinality (smaller first) ----
     pairs = list(itertools.combinations(eligible, 2))
     pairs.sort(key=lambda p: cat_info[p[0]]["unique_values"] * cat_info[p[1]]["unique_values"])
 
-    # ---- 3) Build an adaptive budget in "new columns" units ----
-    # Budget A: sample-based (avoid too many columns vs. rows)
-    budget_from_samples = int(min(max(n_rows // 5, 10), 2000))  # at least 10, at most 2000
-
-    # Budget B: memory proxy — cap added columns to ≤ 25% of current column count
+    budget_from_samples = int(min(max(n_rows // 5, 10), 2000))
     budget_from_memory = max(10, int(n_cols * memory_growth_cap))
-
-    # Final budget = stricter of the two
     new_cols_budget = max(10, min(budget_from_samples, budget_from_memory))
 
-    # ---- 4) Greedy add pairs while not exceeding budget ----
     used_new_cols = 0
 
     def encoding_for_joint(unique_est: int):
-        # Decide encoding & "new columns" cost
         if unique_est <= 10:
-            return "one_hot_encode", "Apply One-Hot Encoding since combined cardinality is low.", max(1, unique_est - 1)
+            return "one_hot_encode", "Apply One-Hot Encoding (low cardinality).", max(1, unique_est - 1)
         elif unique_est <= 50:
-            return "label_encode", "Apply Label Encoding for moderate cardinality.", 1
+            return "label_encode", "Apply Label Encoding (moderate cardinality).", 1
         else:
-            return "frequency_encode", "Apply Frequency Encoding due to high cardinality.", 1
+            return "frequency_encode", "Apply Frequency Encoding (high cardinality).", 1
 
     for c1, c2 in pairs[:max_pairs]:
         new_col = f"{c1}_{c2}_combined"
@@ -693,16 +647,12 @@ def suggest_feature_combination(
 
         enc_fn, enc_text, added_cols = encoding_for_joint(unique_est)
 
-        # If adding this pair would exceed budget, try a cheaper encoding before skipping
         if used_new_cols + added_cols > new_cols_budget:
             if enc_fn == "one_hot_encode":
-                # fall back to label/frequency to keep within budget
-                enc_fn, enc_text, added_cols = ("label_encode", "Budget-aware: using Label Encoding to limit expansion.", 1)
-            # re-check after fallback
+                enc_fn, enc_text, added_cols = ("label_encode", "Budget-aware: using Label Encoding.", 1)
             if used_new_cols + added_cols > new_cols_budget:
-                continue  # still too expensive → skip pair
+                continue
 
-        # (a) Combine
         suggestions.append({
             "feature": f"'{c1}' and '{c2}'",
             "issue": f"Potential interaction between '{c1}' and '{c2}'.",
@@ -715,27 +665,22 @@ def suggest_feature_combination(
             }
         })
 
-        # (b) Encode with budget-aware choice
         suggestions.append({
             "feature": new_col,
-            "issue": f"Estimated {unique_est} unique combos; budget cost ≈ +{added_cols} column(s).",
+            "issue": f"Estimated {unique_est} unique combos.",
             "suggestion": enc_text,
             "function_to_call": enc_fn,
             "kwargs": {"columns": new_col}
         })
 
         used_new_cols += added_cols
+        if used_new_cols >= int(0.95 * new_cols_budget): break
 
-        # Optional soft stop if we’ve used ~95% of budget
-        if used_new_cols >= int(0.95 * new_cols_budget):
-            break
-
-    # Helpful tail note if we truncated
     if used_new_cols >= int(0.95 * new_cols_budget):
         suggestions.append({
             "feature": "budget",
             "issue": "Adaptive threshold reached",
-            "suggestion": f"Limited combined features to keep added columns within ~{new_cols_budget} new columns (≈ {int(memory_growth_cap*100)}% of current width).",
+            "suggestion": f"Limited combined features to keep added columns within budget.",
             "function_to_call": None,
             "kwargs": {}
         })
@@ -745,102 +690,57 @@ def suggest_feature_combination(
 
 def suggest_fastica_features(analysis_results: dict, target_column: str = None) -> list:
     """
-    Suggest applying FastICA to capture global trends across multiple features.
-    
-    FastICA is recommended when:
-    - Dataset has many numerical features (>10)
-    - Features show complex correlations
-    - Data is likely non-Gaussian
-    - Dimensionality reduction is needed
-    
-    Args:
-        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
-        target_column: Name of target column
-    
-    Returns:
-        list: Preprocessing suggestions for FastICA
+    Generate FastICA suggestions using adaptive, data-driven thresholds.
     """
     suggestions = []
     
-    # Get data info
     general_info = analysis_results.get('general_info', {})
     data_types = general_info.get('data_types', {})
     shape = general_info.get('shape', [0, 0])
-    n_samples, n_features = shape[0], shape[1]
+    n_samples = shape[0]
     
-    # Count numerical features
-    numerical_cols = [col for col, dtype in data_types.items() 
-                     if 'int' in dtype or 'float' in dtype]
-    
-    # Exclude target
-    if target_column and target_column in numerical_cols:
-        numerical_cols.remove(target_column)
-    
+    numerical_cols = [
+        col for col, dtype in data_types.items() 
+        if ('int' in dtype or 'float' in dtype) and col != target_column
+    ]
     n_numerical = len(numerical_cols)
     
-    # Decision rules
-    should_suggest = False
-    issue_msg = ""
-    suggestion_msg = ""
-    n_components = None
-    
-    # Rule 1: Many numerical features (>10)
-    if n_numerical > 10:
-        should_suggest = True
-        issue_msg = f"Dataset has {n_numerical} numerical features. FastICA can extract global trends using intelligent hybrid mode."
-        suggestion_msg = (
-            f"Apply FastICA in hybrid mode to intelligently replace redundant features and add independent components. "
-            f"This captures underlying patterns across {n_numerical} features while optimizing dimensionality."
-        )
-        n_components = min(5, n_numerical // 2, n_samples // 10)
-        n_components = max(2, n_components)
-    
-    # Rule 2: High dimensionality (>20 features)
-    elif n_features > 20:
-        should_suggest = True
-        issue_msg = f"High-dimensional dataset ({n_features} features). FastICA can help reduce complexity using intelligent hybrid mode."
-        suggestion_msg = (
-            f"Apply FastICA in hybrid mode to extract independent components and reduce feature space. "
-            f"The system will automatically determine optimal replacement ratio based on data characteristics."
-        )
-        n_components = min(5, n_numerical // 2)
-        n_components = max(2, n_components)
-    
-    # Rule 3: Complex correlations detected
     correlations = analysis_results.get('correlations', {})
-    if correlations:
-        corr_matrix = correlations.get('correlation_matrix', {})
-        if corr_matrix:
-            # Check if there are many high correlations (complex structure)
-            try:
-                corr_df = pd.DataFrame(corr_matrix)
-                high_corr_count = (corr_df.abs() > 0.5).sum().sum() - len(corr_df)  # Exclude diagonal
-                if high_corr_count > n_numerical * 2:  # Many correlations
-                    should_suggest = True
-                    issue_msg = f"Complex correlation structure detected ({high_corr_count} high correlations)."
-                    suggestion_msg = (
-                        f"FastICA in hybrid mode can extract independent signals from correlated features, "
-                        f"intelligently replacing redundant ones while capturing global trends."
-                    )
-                    n_components = min(5, n_numerical // 2)
-                    n_components = max(2, n_components)
-            except:
-                pass
-    
-    if should_suggest and n_components:
+    corr_matrix_dict = correlations.get('correlation_matrix', {})
+
+    potential_new_features = 0
+    if corr_matrix_dict:
+        try:
+            corr_df = pd.DataFrame(corr_matrix_dict)
+            high_corr_pairs_count = (corr_df.abs() >= 0.4).values.sum() // 2
+            potential_new_features = high_corr_pairs_count * 2
+        except: pass
+            
+    should_suggest, reason_msg, recommended_n_components = assess_ica_necessity(
+        n_samples=n_samples,
+        n_features=n_numerical,
+        corr_matrix_dict=corr_matrix_dict,
+        potential_new_features=potential_new_features
+    )
+
+    if should_suggest:
         suggestions.append({
             'feature': 'multiple',
-            'issue': issue_msg,
-            'suggestion': suggestion_msg,
+            'issue': f"Dimensionality reduction recommended. Reasons: {reason_msg}",
+            'suggestion': (
+                f"Apply FastICA (Hybrid Mode) to extract {recommended_n_components} independent components."
+            ),
             'function_to_call': 'apply_fastica',
             'kwargs': {
-                'n_components': n_components,
+                'n_components': recommended_n_components,
                 'target_column': target_column,
                 'mode': 'hybrid',  
                 'replace_ratio': None,
                 'analysis_results': analysis_results,
                 'random_state': 42,
                 'whiten': 'unit-variance'
+                # Removed 'perform_tuning': True because apply_fastica doesn't accept it.
+                # Tuning should be triggered separately if needed.
             }
         })
     
