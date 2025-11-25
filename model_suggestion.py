@@ -120,7 +120,7 @@ def run_model_suggestions(
 
     # Default training time_limit if not provided
     if time_limit is None:
-        time_limit = 60  # seconds, adjust if you want
+        time_limit = 300  # seconds, adjust if you want
 
     # --- SOLUTION IMPLEMENTED HERE ---
     # Create a temporary directory for AutoGluon models to avoid permission issues.
@@ -186,6 +186,15 @@ def run_model_suggestions(
             print(f"Could not compute feature importance: {e}")
             fi_df = None
 
+        # Extract best model hyperparameters
+        best_model_params = {}
+        try:
+            model_info = predictor.model_info(best_model_name)
+            best_model_params = model_info.get('hyperparameters', {})
+            print(f"Extracted hyperparameters for {best_model_name}")
+        except Exception as e:
+            print(f"Could not extract hyperparameters: {e}")
+
         # Prepare results before the directory is deleted
         results = {
             "problem_type": problem_type,
@@ -193,6 +202,7 @@ def run_model_suggestions(
             "leaderboard": leaderboard,
             "best_model_name": best_model_name,
             "best_model_family": best_model_family,
+            "best_model_params": best_model_params,  # Add Zhiqi
             "feature_importance": fi_df,
             "predictor_path": model_path, # Return path in case it needs to be accessed
         }

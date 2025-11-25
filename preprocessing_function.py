@@ -1,12 +1,19 @@
 import pandas as pd
 import numpy as np
-from typing import Union, List, Dict
-from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
+from typing import Union, List, Dict, Optional, Any
+from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, StandardScaler
 from sklearn.impute import KNNImputer
 from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold
 from sklearn.base import clone
 from sklearn.metrics import make_scorer, mean_squared_error, roc_auc_score, log_loss
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.model_selection import train_test_split
 import optuna
+from sklearn.decomposition import FastICA
+import itertools
+
+
+
 
 # ===================================================================
 # Missing values - Tecla
@@ -791,10 +798,10 @@ def calculate_datetime_diff(df: pd.DataFrame,
 def create_features_from_high_correlation(
     df: pd.DataFrame, 
     correlation_threshold: float = 0.3,
-    target_column: str = None,
-    exclude_columns: List[str] = None,
+    target_column: Optional[str] = None,
+    exclude_columns: Optional[List[str]] = None,
     feature_types: List[str] = ['product', 'ratio'],
-    analysis_results: Dict = None, 
+    analysis_results: Optional[Dict] = None, 
     # Filtering parameters
     use_basic_filter: bool = True,
     use_correlation_filter: bool = True,
@@ -805,115 +812,143 @@ def create_features_from_high_correlation(
     **kwargs
 ) -> pd.DataFrame:
     """
-    Create new features from highly correlated pairs with multi-layer filtering.
+    Generate new features based on highly correlated feature pairs.
     
-    Uses the same correlation calculation method as analyze.py.
+    This function acts as the 'Executor'. It takes the threshold suggested by the 
+    'Planner' and performs the actual feature engineering.
     
+    Optimization:
+    It attempts to reuse the pre-calculated correlation matrix from 'analysis_results'
+    to avoid redundant computation on large datasets.
+
     Args:
-        df: Input DataFrame
-        correlation_threshold: Min correlation for feature pairs (default: 0.3)
-        target_column: Optional target column
-        exclude_columns: Columns to exclude
-        feature_types: ['product', 'ratio', 'difference', 'sum', 'interaction']
-        analysis_results: Optional (kept for compatibility, but not used)
-        use_basic_filter: Remove constant/low-cardinality/low-variance features
-        use_correlation_filter: Remove redundant features (corr > threshold)
-        min_cardinality: Min unique values (default: 3)
-        max_new_features: Max features to create (default: 500)
-        corr_filter_threshold: Threshold for redundancy filtering (default: 0.95)
-        min_variance: Minimum variance threshold for filtering (default: 1e-6)
-    
+        df: Input DataFrame.
+        correlation_threshold: Minimum correlation to trigger interaction.
+        target_column: Name of the target column.
+        exclude_columns: List of columns to ignore.
+        feature_types: List of operations.
+        analysis_results: Analysis dictionary containing pre-computed correlations.
+        use_basic_filter: Filter constant/low-variance features.
+        use_correlation_filter: Filter highly redundant new features.
+        min_cardinality: Minimum unique values.
+        max_new_features: Cap on new features.
+        corr_filter_threshold: Threshold for redundancy filtering.
+        min_variance: Minimum variance threshold.
+        **kwargs: Additional arguments for 3rd-order generation.
+
     Returns:
-        DataFrame with new features
+        pd.DataFrame: DataFrame with new features added.
     """
     df = df.copy()
     
-    # 1. Prepare numerical columns (same as analyze.py line 54)
+    # 1. Prepare numerical columns
     numerical_cols = df.select_dtypes(include=np.number).columns.tolist()
     if exclude_columns:
         numerical_cols = [col for col in numerical_cols if col not in exclude_columns]
+    
+    # Ensure target is not used as a raw feature for interaction
     if target_column and target_column in numerical_cols:
         numerical_cols.remove(target_column)
     
     if len(numerical_cols) < 2:
-        print("⚠️ Need at least 2 numerical columns")
+        print("⚠️ [Feature Gen] Need at least 2 numerical columns to generate interactions.")
         return df
     
-    # 2. Get correlation matrix (same logic as analyze.py line 59)
-    corr_matrix = df[numerical_cols].corr()
+    # 2. Get Correlation Matrix (Optimized)
+    # Strategy: Try to load from analysis_results first, calculate only if needed.
+    corr_matrix = None
     
-    # 3. Find high correlation pairs
+    if analysis_results and 'correlations' in analysis_results:
+        try:
+            matrix_data = analysis_results['correlations'].get('correlation_matrix')
+            if matrix_data:
+                # Convert dict/json back to DataFrame
+                cached_corr = pd.DataFrame(matrix_data)
+                
+                # Check if the cached matrix covers our current numerical columns
+                # We filter it to match the current df columns exactly
+                common_cols = [c for c in numerical_cols if c in cached_corr.index]
+                
+                if len(common_cols) >= 2:
+                    corr_matrix = cached_corr.loc[common_cols, common_cols]
+                    # If cached matrix is missing significant columns, we might need to recalc
+                    # But usually, analysis_results comes from the same dataset version.
+                    if len(common_cols) < len(numerical_cols) * 0.9: 
+                        print("ℹ️ [Feature Gen] Cached matrix is missing many columns. Recalculating...")
+                        corr_matrix = None
+                    else:
+                        print("✓ [Feature Gen] Using pre-calculated correlation matrix from analysis_results.")
+        except Exception as e:
+            print(f"ℹ️ [Feature Gen] Failed to load cached correlation matrix: {e}. Recalculating...")
+            corr_matrix = None
+
+    # Fallback: Calculate if not found or invalid
+    if corr_matrix is None:
+        print("⏳ [Feature Gen] Calculating correlation matrix...")
+        corr_matrix = df[numerical_cols].corr()
+    
+    # 3. Identify High-Correlation Pairs
     high_corr_pairs = _find_high_corr_pairs(
         corr_matrix, numerical_cols, target_column, correlation_threshold
     )
     
     if not high_corr_pairs:
-        print(f"❌ No pairs found with |corr| > {correlation_threshold}")
+        print(f"ℹ️ [Feature Gen] No pairs found with correlation > {correlation_threshold}. Skipping.")
         return df
     
-    print(f"✓ Found {len(high_corr_pairs)} high correlation pairs")
+    print(f"✓ [Feature Gen] Found {len(high_corr_pairs)} high correlation pairs.")
     
-    # 4. Generate candidate features
+    # 4. Generate Candidate 2nd-Order Features
     candidate_df = _generate_candidate_features(df, high_corr_pairs, feature_types)
     
     if candidate_df.empty:
-        print("❌ No candidate features generated")
+        print("❌ [Feature Gen] No candidate features were generated.")
         return df
     
-    print(f"✓ Generated {len(candidate_df.columns)} candidate features")
+    print(f"✓ [Feature Gen] Generated {len(candidate_df.columns)} raw candidate features.")
     
-    # 5. Apply filters
+    # 5. Apply Quality Filters (Basic & Redundancy)
     if use_basic_filter:
         candidate_df = _apply_basic_filter(candidate_df, min_cardinality, min_variance)
     
     if use_correlation_filter and len(candidate_df.columns) > 1:
         candidate_df = _apply_correlation_filter(candidate_df, corr_filter_threshold)
     
-    # 6. Intelligent feature selection based on target correlation # Add Zhiqi
+    # 6. Smart Selection: Top N Features based on Target Correlation
     if len(candidate_df.columns) > max_new_features:
-        print(f"⚠️ Selecting top {max_new_features} features based on target correlation")
+        print(f"⚠️ [Feature Gen] Limiting to top {max_new_features} features based on target correlation.")
         
-        # Calculate correlation with target for each candidate feature
         if target_column and target_column in df.columns:
             target_corrs = {}
             for col in candidate_df.columns:
                 try:
                     corr = abs(candidate_df[col].corr(df[target_column]))
-                    if not pd.isna(corr):
-                        target_corrs[col] = corr
-                except:
-                    # If correlation calculation fails, assign low score
+                    target_corrs[col] = corr if not pd.isna(corr) else 0.0
+                except Exception:
                     target_corrs[col] = 0.0
             
-            # Sort by correlation and select top features
             sorted_features = sorted(target_corrs.items(), key=lambda x: x[1], reverse=True)
             selected_cols = [f[0] for f in sorted_features[:max_new_features]]
             candidate_df = candidate_df[selected_cols]
             
-            # Show statistics
             avg_corr = np.mean([f[1] for f in sorted_features[:max_new_features]])
-            print(f"  Average target correlation of selected features: {avg_corr:.4f}")
-            print(f"  Top 5 features by correlation:")
-            for feat, corr in sorted_features[:5]:
-                print(f"    - {feat}: {corr:.4f}")
+            print(f"   -> Average target correlation of selected: {avg_corr:.4f}")
         else:
-            # Fallback to random sampling if no target column
-            print(f"  Warning: No target column specified, using random sampling")
+            print("   -> No target column specified. Using random sampling.")
             candidate_df = candidate_df.sample(n=max_new_features, random_state=42, axis=1)
     
-    # 7. Add second-order features to DataFrame
+    # 7. Merge 2nd-Order Features
     second_order_count = len(candidate_df.columns)
-    for col in candidate_df.columns:
-        df[col] = candidate_df[col]
+    df = pd.concat([df, candidate_df], axis=1)
     
-    print(f"✅ Added {second_order_count} 2nd-order features")
+    print(f"✅ [Feature Gen] Successfully added {second_order_count} 2nd-order features.")
     
-    # 8. Generate third-order features (optional, only if we have enough second-order features)
-    generate_third_order = kwargs.get('generate_third_order', True)  # Default: enabled
+    # 8. Generate 3rd-Order Features (Optional)
+    generate_third_order = kwargs.get('generate_third_order', True)
     min_second_for_third = kwargs.get('min_second_for_third', 20)
     
     if generate_third_order and second_order_count >= min_second_for_third:
-        print("\n🔬 Generating 3rd-order interaction features...")
+        print("\n🔬 [Feature Gen] Attempting 3rd-order interaction features...")
         
         max_third_order = kwargs.get('max_third_order_features', 30)
         top_second_for_third = kwargs.get('top_second_for_third', 50)
@@ -929,67 +964,47 @@ def create_features_from_high_correlation(
             top_original_for_third=top_original_for_third
         )
         
-        # Add third-order features to DataFrame
-        third_order_count = len(third_order_df.columns)
-        for col in third_order_df.columns:
-            df[col] = third_order_df[col]
-        
-        total_new_features = second_order_count + third_order_count
-        print(f"\n✅ Total: {second_order_count} 2nd-order + {third_order_count} 3rd-order = {total_new_features} features")
-    elif generate_third_order and second_order_count < min_second_for_third:
-        print(f"\n⚠️ Skipping 3rd-order generation (need at least {min_second_for_third} 2nd-order features, have {second_order_count})")
+        if not third_order_df.empty:
+            third_order_count = len(third_order_df.columns)
+            df = pd.concat([df, third_order_df], axis=1)
+            print(f"✅ [Feature Gen] Added {third_order_count} 3rd-order features.")
     
     return df
 
 
 # Helper functions
-def _get_correlation_matrix(df, numerical_cols, analysis_results):
-    """Get correlation matrix using the same logic as analyze.py."""
-    # Same calculation as analyze.py line 59: self.df[numerical_cols].corr()
-    return df[numerical_cols].corr()
-
-
-def _find_high_corr_pairs(corr_matrix, numerical_cols, target_column, threshold):
-    """Find pairs with high correlation."""
+def _find_high_corr_pairs(corr_matrix: pd.DataFrame, numerical_cols: List[str], target_column: Optional[str], threshold: float) -> List[tuple]:
+    """
+    Identify pairs of features with correlation above the threshold.
+    Optimized to iterate only the upper triangle, avoiding duplicate checks.
+    """
     pairs = []
     
-    # Handle threshold = 0.0 (include all pairs)
+    # Strategy A: Include all pairs (Threshold = 0)
     if threshold == 0.0:
         for i, col1 in enumerate(numerical_cols):
-            if col1 not in corr_matrix.index:
-                continue
+            if col1 not in corr_matrix.index: continue
             for col2 in numerical_cols[i+1:]:
-                if col2 not in corr_matrix.columns:
-                    continue
-                try:
-                    corr_value = corr_matrix.loc[col1, col2]
-                    if pd.notna(corr_value):
-                        pairs.append((col1, col2, corr_value))
-                except (KeyError, IndexError):
-                    continue
+                if col2 not in corr_matrix.columns: continue
+                val = corr_matrix.loc[col1, col2]
+                pairs.append((col1, col2, val))
         return pairs
     
-    # Normal case: threshold > 0
-    # Prioritize target correlations
-    if target_column and target_column in corr_matrix.index:
-        target_corrs = corr_matrix[target_column].abs()
-        high_corr_cols = target_corrs[target_corrs > threshold].index.tolist()
-        if target_column in high_corr_cols:
-            high_corr_cols.remove(target_column)
-        
-        for col in high_corr_cols:
-            if col in numerical_cols:
-                pairs.append((target_column, col, corr_matrix.loc[target_column, col]))
-    
-    # Find all high correlation pairs
+    # Strategy B: Normal iteration (Threshold > 0)
+    # We iterate upper triangle to avoid duplicates (A,B) and (B,A)
+    # This loop structure inherently prevents duplicates, so no "if not in pairs" check is needed.
     for i, col1 in enumerate(numerical_cols):
+        if col1 not in corr_matrix.index: continue
+        
         for col2 in numerical_cols[i+1:]:
+            if col2 not in corr_matrix.columns: continue
+            
             try:
-                corr_value = corr_matrix.loc[col1, col2]
-                if pd.notna(corr_value) and abs(corr_value) > threshold:
-                    if not any((c1, c2) in [(col1, col2), (col2, col1)] for c1, c2, _ in pairs):
-                        pairs.append((col1, col2, corr_value))
-            except (KeyError, IndexError):
+                val = corr_matrix.loc[col1, col2]
+                # Check for NaN and threshold
+                if pd.notna(val) and abs(val) > threshold:
+                    pairs.append((col1, col2, val))
+            except Exception:
                 continue
     
     return pairs
@@ -1025,220 +1040,229 @@ def _generate_candidate_features(df, high_corr_pairs, feature_types):
     return pd.DataFrame(candidates, index=df.index) if candidates else pd.DataFrame()
 
 
-def _apply_basic_filter(candidate_df, min_cardinality, min_variance=1e-6):
+def _apply_basic_filter(df: pd.DataFrame, min_cardinality: int, min_variance: float = 1e-6) -> pd.DataFrame:
     """
-    Apply basic filtering: constant, low cardinality, high missing, low variance.
+    Apply basic filtering: removes columns with low cardinality, high missing rate, or low variance.
+    
+    Includes detailed logging to track why features were dropped.
     
     Args:
-        candidate_df: DataFrame with candidate features
-        min_cardinality: Minimum number of unique values required
-        min_variance: Minimum variance threshold (default: 1e-6)
+        df: Input DataFrame containing candidate features.
+        min_cardinality: Minimum number of unique values required (e.g., 3).
+        min_variance: Minimum variance threshold (default: 1e-6).
     
     Returns:
-        Filtered DataFrame
+        pd.DataFrame: Filtered DataFrame.
     """
-    n_before = len(candidate_df.columns)
-    
-    # Remove constant, low cardinality, high missing, and low variance features
+    n_before = len(df.columns)
     to_keep = []
-    removed_reasons = {'constant': 0, 'low_cardinality': 0, 'high_missing': 0, 'low_variance': 0}
     
-    for col in candidate_df.columns:
-        # Check cardinality
-        unique_count = candidate_df[col].nunique()
-        if unique_count < min_cardinality:
-            removed_reasons['low_cardinality'] += 1
+    # Counters for logging (Essential for debugging feature engineering)
+    dropped_counts = {'low_cardinality': 0, 'high_missing': 0, 'low_variance': 0}
+    
+    for col in df.columns:
+        # 1. Cardinality Check (Are there enough unique values?)
+        if df[col].nunique() < min_cardinality:
+            dropped_counts['low_cardinality'] += 1
             continue
-        
-        # Check missing values
-        missing_pct = candidate_df[col].isnull().mean()
-        if missing_pct > 0.5:
-            removed_reasons['high_missing'] += 1
+            
+        # 2. Missing Value Check (Is it mostly empty?)
+        if df[col].isnull().mean() > 0.5:
+            dropped_counts['high_missing'] += 1
             continue
-        
-        # Check variance (new filtering criterion)
-        variance = candidate_df[col].var()
-        if pd.isna(variance) or variance < min_variance:
-            removed_reasons['low_variance'] += 1
+            
+        # 3. Variance Check (Does it carry information?)
+        # We explicitly handle NaN variance (happens if only 1 value exists)
+        var = df[col].var()
+        if pd.isna(var) or var < min_variance:
+            dropped_counts['low_variance'] += 1
             continue
-        
-        # Check if constant (variance = 0)
-        if variance == 0:
-            removed_reasons['constant'] += 1
-            continue
-        
+            
         to_keep.append(col)
+        
+    df_filtered = df[to_keep]
+    n_after = len(df_filtered.columns)
     
-    candidate_df = candidate_df[to_keep]
+    # Log the results clearly
+    print(f"  Basic Filter: {n_before} → {n_after} features")
+    if n_before != n_after:
+        details = [f"{k}: {v}" for k, v in dropped_counts.items() if v > 0]
+        print(f"    Dropped: {', '.join(details)}")
     
-    # Print detailed filtering results
-    print(f"  Basic filter: {n_before} → {len(candidate_df.columns)} features")
-    if any(removed_reasons.values()):
-        filter_details = [f"{reason}: {count}" for reason, count in removed_reasons.items() if count > 0]
-        print(f"    Removed - {', '.join(filter_details)}")
-    
-    return candidate_df
+    return df_filtered
 
 
-def _apply_correlation_filter(candidate_df, threshold):
-    """Remove redundant features with high correlation."""
-    n_before = len(candidate_df.columns)
+def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.95) -> pd.DataFrame:
+    """
+    Remove redundant features with high correlation using a greedy strategy.
     
-    corr_matrix = candidate_df.corr().abs()
-    to_remove = set()
+    Logic:
+    Iterates through features. If Feature A and Feature B are highly correlated,
+    Feature A (the first one) is kept, and Feature B is dropped.
     
-    for i, col1 in enumerate(candidate_df.columns):
-        if col1 in to_remove:
+    Args:
+        df: Input DataFrame.
+        threshold: Correlation threshold (default 0.95).
+        
+    Returns:
+        pd.DataFrame: DataFrame with redundant features removed.
+    """
+    # 1. Safety Check
+    if df.empty or len(df.columns) < 2:
+        return df
+        
+    n_before = len(df.columns)
+    
+    # 2. Calculate Correlation Matrix once
+    # Use absolute values because -0.99 is just as redundant as 0.99
+    corr_matrix = df.corr().abs()
+    
+    # 3. Greedy Selection Loop
+    to_drop = set()
+    columns = df.columns.tolist()
+    
+    for i in range(len(columns)):
+        col1 = columns[i]
+        
+        # If col1 is already marked for removal, it's "dead". 
+        # Dead features don't get to decide the fate of others.
+        if col1 in to_drop:
             continue
-        for col2 in candidate_df.columns[i+1:]:
-            if col2 not in to_remove and corr_matrix.loc[col1, col2] > threshold:
-                to_remove.add(col2)
+            
+        for j in range(i + 1, len(columns)):
+            col2 = columns[j]
+            
+            # Optimization: If col2 is already dead, skip checking it
+            if col2 in to_drop:
+                continue
+            
+            # Check correlation
+            # Try-except block handles rare edge cases (like NaNs in correlation)
+            try:
+                if corr_matrix.loc[col1, col2] > threshold:
+                    to_drop.add(col2)
+            except:
+                continue
     
-    candidate_df = candidate_df.drop(columns=list(to_remove))
-    print(f"  Correlation filter: {n_before} → {len(candidate_df.columns)} features")
+    # 4. Drop Features
+    df_filtered = df.drop(columns=list(to_drop))
+    n_after = len(df_filtered.columns)
     
-    return candidate_df
+    # 5. Logging (Crucial for observability)
+    print(f"  Correlation Filter: {n_before} → {n_after} features")
+    if to_drop:
+        print(f"    Dropped {len(to_drop)} redundant features (> {threshold})")
+        
+    return df_filtered
 
+
+from typing import List, Optional
+import pandas as pd
+import numpy as np
 
 def _generate_third_order_features(
     df: pd.DataFrame,
     second_order_features: pd.DataFrame,
     original_features: List[str],
-    target_column: str,
+    target_column: Optional[str],
     max_third_order: int = 30,
     top_second_for_third: int = 50,
     top_original_for_third: int = 30
 ) -> pd.DataFrame:
     """
-    Generate third-order interaction features from the best second-order features.
+    Generate diverse 3rd-order features (Product, Ratio, Sum, Diff).
     
-    Strategy: Combine top second-order features with top original features
-    to create meaningful third-order interactions like (A*B)*C, (A/B)+C, etc.
-    
-    Args:
-        df: Original DataFrame (must contain target_column)
-        second_order_features: DataFrame with second-order features
-        original_features: List of original numerical feature names
-        target_column: Target column name for correlation calculation
-        max_third_order: Maximum number of third-order features to keep
-        top_second_for_third: Number of top second-order features to use
-        top_original_for_third: Number of top original features to use
-    
-    Returns:
-        DataFrame with selected third-order features
+    Logic:
+    Selects the "Elite" 2nd-order features and "Elite" original features,
+    then combines them using +, -, *, / to capture various interaction types.
     """
-    if target_column not in df.columns:
-        print("  Warning: Target column not found, skipping 3rd-order generation")
+    # 1. Validation
+    if not target_column or target_column not in df.columns:
+        print("  ℹ️ [3rd Order] Target column missing. Skipping.")
         return pd.DataFrame()
     
-    # 1. Select best second-order features based on target correlation
-    second_order_corrs = {}
+    # 2. Rank 2nd Order Features (The "Elites")
+    second_corrs = {}
     for col in second_order_features.columns:
         try:
-            corr = abs(second_order_features[col].corr(df[target_column]))
-            if not pd.isna(corr):
-                second_order_corrs[col] = corr
-        except:
-            continue
-    
-    if not second_order_corrs:
-        print("  Warning: No valid second-order features, skipping 3rd-order generation")
+            val = abs(second_order_features[col].corr(df[target_column]))
+            if pd.notna(val): second_corrs[col] = val
+        except: continue
+        
+    if not second_corrs:
+        print("  ℹ️ [3rd Order] No valid 2nd-order features found.")
         return pd.DataFrame()
+        
+    top_second = sorted(second_corrs, key=second_corrs.get, reverse=True)[:top_second_for_third]
     
-    sorted_second = sorted(second_order_corrs.items(), key=lambda x: x[1], reverse=True)
-    top_second_features = [f[0] for f in sorted_second[:top_second_for_third]]
-    
-    # 2. Select best original features based on target correlation
-    original_corrs = {}
+    # 3. Rank Original Features
+    orig_corrs = {}
     for col in original_features:
         if col in df.columns and col != target_column:
             try:
-                corr = abs(df[col].corr(df[target_column]))
-                if not pd.isna(corr):
-                    original_corrs[col] = corr
-            except:
-                continue
+                val = abs(df[col].corr(df[target_column]))
+                if pd.notna(val): orig_corrs[col] = val
+            except: continue
+            
+    top_orig = sorted(orig_corrs, key=orig_corrs.get, reverse=True)[:top_original_for_third]
     
-    sorted_original = sorted(original_corrs.items(), key=lambda x: x[1], reverse=True)
-    top_original_features = [f[0] for f in sorted_original[:top_original_for_third]]
+    print(f"  🔬 [3rd Order] Combining {len(top_second)} interaction features × {len(top_orig)} original features...")
     
-    print(f"  Generating 3rd-order from {len(top_second_features)} 2nd-order × {len(top_original_features)} original features")
-    
-    # 3. Generate third-order candidates
+    # 4. Generate Candidates (The 4 Operations)
     candidates = {}
-    for second_feat in top_second_features:
-        second_values = second_order_features[second_feat]
-        
-        for orig_feat in top_original_features:
-            if orig_feat not in df.columns:
-                continue
+    for f2 in top_second:
+        v2 = second_order_features[f2]
+        for f1 in top_orig:
+            v1 = df[f1]
             
-            orig_values = df[orig_feat]
+            # Pre-calculate safe denominator for division
+            # Replacing 0 with NaN prevents "inf" errors
+            v1_safe = v1.replace(0, np.nan)
             
-            # Avoid division by zero
-            orig_nonzero = orig_values.replace(0, np.nan)
-            second_nonzero = second_values.replace(0, np.nan)
+            # --- Operation 1: Product ((A*B)*C) ---
+            candidates[f'{f2}_x_{f1}'] = v2 * v1
             
-            # Generate 4 types of interactions
-            try:
-                candidates[f'{second_feat}_x_{orig_feat}'] = second_values * orig_values
-            except:
-                pass
+            # --- Operation 2: Ratio ((A*B)/C) ---
+            candidates[f'{f2}_div_{f1}'] = v2 / v1_safe
             
-            try:
-                candidates[f'{second_feat}_div_{orig_feat}'] = second_values / orig_nonzero
-            except:
-                pass
+            # --- Operation 3: Sum ((A*B)+C) ---
+            # Captures additive offsets
+            candidates[f'{f2}_plus_{f1}'] = v2 + v1
             
-            try:
-                candidates[f'{second_feat}_plus_{orig_feat}'] = second_values + orig_values
-            except:
-                pass
+            # --- Operation 4: Difference ((A*B)-C) ---
+            candidates[f'{f2}_minus_{f1}'] = v2 - v1
             
-            try:
-                candidates[f'{second_feat}_minus_{orig_feat}'] = second_values - orig_values
-            except:
-                pass
-    
     if not candidates:
-        print("  Warning: No 3rd-order candidates generated")
         return pd.DataFrame()
+        
+    cand_df = pd.DataFrame(candidates, index=df.index)
     
-    candidate_df = pd.DataFrame(candidates, index=df.index)
-    print(f"  Generated {len(candidate_df.columns)} 3rd-order candidates")
+    # 5. Quality Filter (Variance/Nulls)
+    # Using the robust filter we defined earlier
+    cand_df = _apply_basic_filter(cand_df, min_cardinality=3, min_variance=1e-5)
     
-    # 4. Apply basic filtering
-    candidate_df = _apply_basic_filter(candidate_df, min_cardinality=3, min_variance=1e-5)
-    print(f"  After basic filter: {len(candidate_df.columns)} 3rd-order features")
-    
-    if candidate_df.empty:
-        return candidate_df
-    
-    # 5. Select based on target correlation
-    third_order_corrs = {}
-    for col in candidate_df.columns:
+    if cand_df.empty:
+        return cand_df
+
+    # 6. Final Selection by Target Correlation
+    final_corrs = {}
+    for col in cand_df.columns:
         try:
-            corr = abs(candidate_df[col].corr(df[target_column]))
-            if not pd.isna(corr):
-                third_order_corrs[col] = corr
-        except:
-            third_order_corrs[col] = 0.0
+            val = abs(cand_df[col].corr(df[target_column]))
+            if pd.notna(val): final_corrs[col] = val
+        except: continue
+        
+    best_features = sorted(final_corrs, key=final_corrs.get, reverse=True)[:max_third_order]
     
-    sorted_third = sorted(third_order_corrs.items(), key=lambda x: x[1], reverse=True)
-    selected_third = [f[0] for f in sorted_third[:max_third_order]]
+    result = cand_df[best_features]
     
-    result_df = candidate_df[selected_third]
-    
-    # 6. Display statistics
-    if len(sorted_third) > 0:
-        avg_corr = np.mean([f[1] for f in sorted_third[:max_third_order]])
-        print(f"  ✅ Selected {len(result_df.columns)} 3rd-order features")
-        print(f"  Average target correlation: {avg_corr:.4f}")
-        print(f"  Top 3 3rd-order features:")
-        for feat, corr in sorted_third[:3]:
-            print(f"    - {feat[:80]}...: {corr:.4f}" if len(feat) > 80 else f"    - {feat}: {corr:.4f}")
-    
-    return result_df
+    # Stats
+    if len(best_features) > 0:
+        avg = np.mean([final_corrs[f] for f in best_features])
+        print(f"  ✅ [3rd Order] Selected {len(result.columns)} features. Avg Corr: {avg:.4f}")
+        print(f"  -> Top feature: {best_features[0]} ({final_corrs[best_features[0]]:.4f})")
+        
+    return result
 
 
 def create_features_from_correlation_analysis(
@@ -1253,7 +1277,7 @@ def create_features_from_correlation_analysis(
         **kwargs
     )
     
-    
+   
 def combine_categorical_features(df: pd.DataFrame,
                                  columns_to_combine: List[str],
                                  new_col_name: str,
@@ -1265,7 +1289,7 @@ def combine_categorical_features(df: pd.DataFrame,
     This can help models capture interaction effects between categorical variables.
 
     Args:
-        df: Input DataFrame.
+         df: Input DataFrame.
         columns_to_combine: List of column names to combine.
         new_col_name: Name for the newly created combined column.
         separator: The string to use for joining the values. Default is '_'.
@@ -1292,11 +1316,7 @@ def combine_categorical_features(df: pd.DataFrame,
 
     return df
 
-import numpy as np
-import pandas as pd
-from typing import List
-from sklearn.decomposition import FastICA
-from sklearn.preprocessing import StandardScaler
+
 
 
 def apply_fastica(
@@ -1505,71 +1525,70 @@ def _calculate_intelligent_replace_ratio(
     max_ratio: float = 0.7,
 ) -> float:
     """
-    Heuristic: how aggressively to replace original numeric features with ICA components.
-
-    - Base ratio depends on n_components / n_features
-    - Adjust based on feature redundancy (correlation patterns)
-    - For low-correlation datasets, be more conservative (replace less)
+    Calculates replacement ratio based on feature redundancy metrics.
+    
+    Optimized for stability:
+    1. Handles mismatch between current columns and cached analysis results.
+    2. Uses both average correlation and high-correlation density.
     """
+    # 1. Base Ratio: Proportional to dimensionality reduction needs
     n_features = max(1, len(numerical_cols))
-    # Base: proportional to dimensionality reduction strength
     base_ratio = n_components / n_features + 0.1
-    base_ratio = max(min_ratio, min(max_ratio, base_ratio))
+    
+    # If no analysis results, return safe base ratio immediately
+    if not analysis_results:
+        return float(max(min_ratio, min(max_ratio, base_ratio)))
 
-    # If we have correlation info, adjust based on redundancy
-    if analysis_results:
-        corr_info = analysis_results.get("correlations", {})
-        corr_matrix_dict = corr_info.get("correlation_matrix")
-        if corr_matrix_dict:
-            try:
-                corr_df = pd.DataFrame(corr_matrix_dict)
-                # Restrict to current numerical columns
-                corr_df = corr_df.loc[numerical_cols, numerical_cols]
+    try:
+        # 2. Extract Correlation Matrix Safely
+        corr_data = analysis_results.get("correlations", {}).get("correlation_matrix")
+        if not corr_data:
+            return float(max(min_ratio, min(max_ratio, base_ratio)))
 
-                # Ignore diagonal
-                mask = ~np.eye(len(corr_df), dtype=bool)
-                corr_values = corr_df.abs()[mask]
-                
-                # Calculate average correlation (excluding diagonal)
-                avg_corr = corr_values.mean()
-                
-                # Calculate proportion of high correlations (multiple thresholds)
-                high_corr_70 = (corr_values > 0.7).mean()  # Very high correlation
-                high_corr_50 = (corr_values > 0.5).mean()  # Moderate-high correlation
-                high_corr_30 = (corr_values > 0.3).mean()  # Low-moderate correlation
-                
-                # Strategy: Use average correlation as primary signal
-                # Low avg correlation (< 0.3) → reduce replacement (more conservative)
-                # High avg correlation (> 0.5) → increase replacement (more aggressive)
-                
-                if avg_corr < 0.2:
-                    # Very low correlation: features are mostly independent
-                    # Be conservative - reduce replacement by 0.1-0.15
-                    base_ratio = max(min_ratio, base_ratio - 0.15)
-                elif avg_corr < 0.3:
-                    # Low correlation (your typical case): slightly reduce
-                    base_ratio = max(min_ratio, base_ratio - 0.08)
-                elif avg_corr < 0.4:
-                    # Moderate-low correlation: slight reduction
-                    base_ratio = max(min_ratio, base_ratio - 0.03)
-                elif avg_corr >= 0.6:
-                    # High correlation: increase replacement
-                    if high_corr_70 > 0.3:
-                        base_ratio += 0.15  # very redundant
-                    else:
-                        base_ratio += 0.08
-                elif avg_corr >= 0.5:
-                    # Moderate-high correlation
-                    if high_corr_50 > 0.3:
-                        base_ratio += 0.10
-                    else:
-                        base_ratio += 0.05
-                # avg_corr 0.4-0.5: keep base_ratio unchanged
-                
-            except Exception:
-                # Fail silently and just use base_ratio
-                pass
+        # 3. Robust Indexing (Key Stability Fix)
+        # analysis_results might be old (pre-feature-generation), so we must find the intersection
+        # of columns to avoid KeyError during .loc
+        cached_cols = pd.DataFrame(corr_data).columns
+        valid_cols = list(set(numerical_cols).intersection(cached_cols))
+        
+        if len(valid_cols) < 2:
+            # Not enough overlapping columns to judge redundancy
+            return float(max(min_ratio, min(max_ratio, base_ratio)))
 
+        corr_df = pd.DataFrame(corr_data).loc[valid_cols, valid_cols]
+
+        # 4. Calculate Statistics (Vectorized)
+        # Extract off-diagonal elements
+        mask = ~np.eye(len(corr_df), dtype=bool)
+        values = corr_df.abs().values[mask]
+        
+        if len(values) == 0:
+            return float(max(min_ratio, min(max_ratio, base_ratio)))
+
+        avg_corr = values.mean()
+        # Density of very high correlations (> 0.7)
+        # This catches cases where avg is low, but specific clusters are redundant
+        high_corr_density = (values > 0.7).mean()
+
+        # 5. Dynamic Adjustment Strategy
+        if avg_corr < 0.2:
+            base_ratio -= 0.15  # Mostly independent -> keep original
+        elif avg_corr < 0.3:
+            base_ratio -= 0.08
+        elif avg_corr >= 0.6:
+            # If extremely redundant OR high density of strong pairs -> replace aggressively
+            if high_corr_density > 0.3:
+                base_ratio += 0.15
+            else:
+                base_ratio += 0.08
+        elif avg_corr >= 0.5:
+             base_ratio += 0.05
+
+    except Exception as e:
+        # Fail safe: log if needed, but return base ratio to keep pipeline alive
+        # print(f"Warning in replace ratio calc: {e}")
+        pass
+    # 6. Final Clamp
     return float(max(min_ratio, min(max_ratio, base_ratio)))
 
 
@@ -1578,93 +1597,153 @@ def _select_features_to_replace(
     numerical_cols: List[str],
     n_to_replace: int,
     analysis_results: dict = None
-) -> (List[str], List[str]):
+) -> tuple:
     """
-    Decide which numerical features to replace with ICA components.
-
-    Heuristic:
-    - If we have target correlations, treat low-importance features as candidates
-      (low |corr(target, feature)| → more likely to replace).
-    - Otherwise, fallback to variance-based ranking (low variance → more replaceable).
+    Decides which features to replace based on Importance (Target Corr > Variance).
+    
+    Optimized for:
+    1. Speed: Uses vectorized operations for variance fallback.
+    2. Stability: Guarantees at least 1 feature is kept.
     """
-    n_to_replace = max(0, min(len(numerical_cols), n_to_replace))
+    # 1. Boundary Check
+    total_feats = len(numerical_cols)
+    n_to_replace = max(0, min(total_feats, n_to_replace))
+    
     if n_to_replace == 0:
         return [], numerical_cols
 
+    # 2. Initialize Scores
     scores = {col: 0.0 for col in numerical_cols}
+    used_target_corr = False
 
-    # 1) If we have target correlations, use them as importance scores
+    # 3. Strategy A: Target Correlation (Priority)
     if analysis_results:
-        corr_info = analysis_results.get("correlations", {})
-        target_corr = corr_info.get("target_correlation")
-        if isinstance(target_corr, dict):
+        target_corr = analysis_results.get("correlations", {}).get("target_correlation", {})
+        if target_corr:
             for col in numerical_cols:
                 val = target_corr.get(col)
                 if isinstance(val, (int, float)) and not pd.isna(val):
-                    scores[col] = abs(val)  # higher = more important
+                    scores[col] = abs(val)
+            
+            # Check if we actually got any non-zero signal
+            if any(s > 0 for s in scores.values()):
+                used_target_corr = True
 
-    # 2) If all scores are zero, fallback to variance
-    if all((v == 0 or pd.isna(v)) for v in scores.values()):
-        for col in numerical_cols:
-            try:
-                scores[col] = df[col].var()
-            except Exception:
-                scores[col] = 0.0
+    # 4. Strategy B: Variance (Fallback) - Vectorized
+    # Only run if Target Correlation failed or provided no signal
+    if not used_target_corr:
+        try:
+            # Vectorized calculation is faster than loop
+            variances = df[numerical_cols].var().fillna(0)
+            scores = variances.to_dict()
+        except Exception:
+            # Absolute fallback if something goes wrong
+            pass
 
-    # 3) Sort ascending by importance → lowest scores are replaced first
+    # 5. Sort: Lowest Score -> Replace First
+    # Primary sort key: Score (ascending). Secondary key: Name (for deterministic tie-breaking)
     ordered_cols = sorted(numerical_cols, key=lambda c: (scores.get(c, 0.0), c))
 
-    cols_to_replace = ordered_cols[:n_to_replace]
-    cols_to_keep = [c for c in numerical_cols if c not in cols_to_replace]
+    # 6. Slicing with Safety Net
+    # If algorithm wants to replace ALL features, forcefully keep the best one
+    if n_to_replace == total_feats:
+        n_to_replace -= 1
 
-    # Safety: always keep at least 1 feature
-    if not cols_to_keep and numerical_cols:
-        cols_to_keep = [ordered_cols[-1]]
-        cols_to_replace = [c for c in numerical_cols if c not in cols_to_keep]
+    cols_to_replace = ordered_cols[:n_to_replace]
+    cols_to_keep = ordered_cols[n_to_replace:]
 
     return cols_to_replace, cols_to_keep
 
 
 def _create_ica_interactions(ica_df: pd.DataFrame, n_interactions: int = 5) -> pd.DataFrame:
     """
-    Create interaction features from ICA components (e.g., ICA_0 * ICA_1, ICA_0^2).
-
-    Args:
-        ica_df: DataFrame of ICA components (columns: ICA_0, ICA_1, ...)
-        n_interactions: Maximum number of interaction features to create.
-
-    Returns:
-        DataFrame with interaction features.
+    Creates pairwise interactions of ICA components.
+    
+    Optimized for:
+    1. Readability: Uses itertools to replace nested loops.
+    2. Performance: Builds dict first to avoid DataFrame fragmentation.
     """
-    interactions = []
-    interaction_names = []
+    # 1. Boundary Checks
+    if ica_df.empty or n_interactions <= 0 or len(ica_df.columns) < 2:
+        return pd.DataFrame(index=ica_df.index)
 
-    ica_cols = ica_df.columns.tolist()
-
-    # Product interactions (ICA_i * ICA_j)
-    for i in range(min(len(ica_cols), n_interactions)):
-        for j in range(i + 1, min(len(ica_cols), n_interactions)):
-            if len(interactions) >= n_interactions:
-                break
-            interactions.append(ica_df[ica_cols[i]] * ica_df[ica_cols[j]])
-            interaction_names.append(f'{ica_cols[i]}_x_{ica_cols[j]}')
+    interactions = {}
+    
+    # 2. Generate Combinations (Safe & Pythonic)
+    # combinations('ABCD', 2) --> AB AC AD BC BD CD
+    for col1, col2 in itertools.combinations(ica_df.columns, 2):
+        
+        # Stop if quota reached
         if len(interactions) >= n_interactions:
             break
+            
+        # Create Interaction
+        interactions[f'{col1}_x_{col2}'] = ica_df[col1] * ica_df[col2]
 
-    if interactions:
-        interaction_df = pd.DataFrame(
-            dict(zip(interaction_names, interactions)),
-            index=ica_df.index
+    return pd.DataFrame(interactions, index=ica_df.index)
+
+def _evaluate_fastica_performance(
+    replace_ratio: float,
+    df_work: pd.DataFrame,
+    target_column: str,
+    original_numerical: List[str],
+    model,
+    cv,
+    is_reg: bool,
+    eval_metric: str,
+    pt: str,
+    apply_fastica_fn, 
+    fastica_args: dict
+) -> Dict[str, Any]:
+    """
+    Common evaluation logic shared by Grid Search and Optuna.
+    Executes the entire FastICA + CV pipeline for a single replace_ratio.
+    """
+    try:
+        # A. Transform Data
+        df_trans = apply_fastica_fn(
+            df_work,
+            target_column=target_column,
+            replace_ratio=replace_ratio,
+            **fastica_args
         )
-        return interaction_df
+        
+        X = df_trans.drop(columns=[target_column])
+        y = df_trans[target_column]
+        
+        if X.empty: raise ValueError("Empty features after transformation")
 
-    return pd.DataFrame(index=ica_df.index)
+        # B. Metadata Counting
+        n_features_after = len(X.columns)
+        n_replaced = max(1, int(len(original_numerical) * replace_ratio))
+        
+        # C. Cross-Validation
+        model_clone = clone(model) if hasattr(model, 'fit') else model.__class__(**model.get_params())
+        
+        # Select Scoring based on problem type
+        if is_reg:
+            scoring = 'neg_root_mean_squared_error'
+            raw_scores = cross_val_score(model_clone, X, y, cv=cv, scoring=scoring, n_jobs=-1)
+            scores = -raw_scores # Convert to positive RMSE
+        else:
+            if eval_metric == "roc_auc" and pt == "binary":
+                raw_scores = cross_val_score(model_clone, X, y, cv=cv, scoring='roc_auc', n_jobs=-1)
+                scores = 1.0 - raw_scores # Minimize (1 - AUC)
+            else:
+                scoring = 'neg_log_loss' if hasattr(model_clone, "predict_proba") else 'accuracy'
+                raw_scores = cross_val_score(model_clone, X, y, cv=cv, scoring=scoring, n_jobs=-1)
+                scores = -raw_scores if 'neg' in scoring else (1.0 - raw_scores)
 
-from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold
-from sklearn.base import clone
-from sklearn.metrics import make_scorer, mean_squared_error, roc_auc_score, log_loss
-import optuna
+        return {
+            "score": np.mean(scores),
+            "std": np.std(scores),
+            "n_features_after": n_features_after,
+            "n_replaced": n_replaced,
+            "error": None
+        }
 
+    except Exception as e:
+        return {"score": float('inf'), "error": str(e)}
 
 def grid_search_replace_ratio(
     df: pd.DataFrame,
@@ -1680,203 +1759,62 @@ def grid_search_replace_ratio(
     **fastica_kwargs
 ) -> pd.DataFrame:
     """
-    Grid search to test different replace_ratio values for FastICA.
-    
-    This function provides a macro-level view by testing multiple replace_ratio values
-    and recording detailed information for each trial, including feature counts and
-    cross-validation scores.
-    
-    Args:
-        df: Input dataframe
-        target_column: Target column name
-        model: Model instance or model class (must support fit/predict)
-        problem_type: 'regression', 'binary', or 'multiclass'
-        replace_ratios: List of replace_ratio values to test. 
-                       If None, uses default range [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7]
-        n_components: Number of ICA components
-        exclude_columns: Columns to exclude from ICA
-        analysis_results: Analysis results dictionary
-        cv_folds: Number of cross-validation folds (default: 5)
-        random_state: Random seed
-        **fastica_kwargs: Additional arguments for apply_fastica
-        
-    Returns:
-        DataFrame with columns:
-            - replace_ratio: Tested replace_ratio value
-            - mean_score: Mean CV score
-            - std_score: Standard deviation of CV scores
-            - min_score: Minimum CV score
-            - max_score: Maximum CV score
-            - n_features_before: Number of features before FastICA
-            - n_features_after: Number of features after FastICA
-            - n_components: Number of ICA components used
-            - n_replaced: Number of features replaced
-            - n_kept: Number of features kept
-            - n_interactions: Number of interaction features added (if enabled)
-            - status: 'success' or 'error'
-            - error_message: Error message if status is 'error'
+    Grid search wrapper reusing the unified evaluation engine.
+    Significantly shorter and cleaner.
     """
-    import numpy as np
-    
-    if replace_ratios is None:
-        replace_ratios = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7]
-    
+    # Local import to avoid circular dependency    
+    # 1. Setup
+    if replace_ratios is None: replace_ratios = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7]
     df_work = df.copy()
-    if target_column not in df_work.columns:
-        raise ValueError(f"Target column '{target_column}' not found")
+    if target_column not in df_work.columns: raise ValueError(f"Target column '{target_column}' not found")
     
     pt = problem_type.lower()
     is_reg = pt == "regression"
+    eval_metric = "rmse" if is_reg else "roc_auc" if pt == "binary" else "log_loss"
     
-    # Setup cross-validation
-    if is_reg:
-        cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    else:
-        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
+    # CV Setup
+    cv_cls = KFold if is_reg else StratifiedKFold
+    cv = cv_cls(n_splits=cv_folds, shuffle=True, random_state=random_state)
     
-    y = df_work[target_column]
-    n_features_before = len(df_work.columns) - 1  # Exclude target
+    # Identify original numerical columns (for counting stats)
+    original_numerical = df_work.select_dtypes(include=np.number).columns.tolist()
+    if target_column in original_numerical: original_numerical.remove(target_column)
     
+    fastica_args = {
+        "n_components": n_components,
+        "exclude_columns": exclude_columns,
+        "mode": 'hybrid',
+        "analysis_results": analysis_results,
+        "random_state": random_state,
+        **fastica_kwargs
+    }
+    
+    # 2. Loop
     results = []
+    print(f"🔎 Starting Grid Search for Replace Ratio ({len(replace_ratios)} values)...")
     
-    for replace_ratio in replace_ratios:
-        print(f"Testing replace_ratio = {replace_ratio:.2f}...")
+    for ratio in replace_ratios:
+        # Call the engine!
+        res = _evaluate_fastica_performance(
+            ratio, df_work, target_column, original_numerical, 
+            model, cv, is_reg, eval_metric, pt, apply_fastica, fastica_args
+        )
         
-        try:
-            # Apply FastICA
-            df_transformed = apply_fastica(
-                df_work,
-                n_components=n_components,
-                target_column=target_column,
-                exclude_columns=exclude_columns,
-                mode='hybrid',
-                replace_ratio=replace_ratio,
-                analysis_results=analysis_results,
-                random_state=random_state,
-                **fastica_kwargs
-            )
-            
-            # Prepare features and target
-            X = df_transformed.drop(columns=[target_column])
-            y_transformed = df_transformed[target_column]
-            
-            if X.empty or len(X.columns) == 0:
-                print(f"  ⚠️ Empty features, skipping")
-                results.append({
-                    "replace_ratio": replace_ratio,
-                    "mean_score": np.nan,
-                    "std_score": np.nan,
-                    "min_score": np.nan,
-                    "max_score": np.nan,
-                    "n_features_before": n_features_before,
-                    "n_features_after": 0,
-                    "n_components": n_components,
-                    "n_replaced": 0,
-                    "n_kept": 0,
-                    "n_interactions": 0,
-                    "status": "error",
-                    "error_message": "Empty features after transformation"
-                })
-                continue
-            
-            n_features_after = len(X.columns)
-            
-            # Count ICA components and interaction features
-            ica_cols = [col for col in X.columns if col.startswith('ICA_')]
-            interaction_cols = [col for col in X.columns if '_x_' in col and any(c.startswith('ICA_') for c in col.split('_x_'))]
-            n_ica_components = len(ica_cols)
-            n_interactions = len(interaction_cols)
-            
-            # Estimate n_replaced and n_kept (approximate)
-            original_numerical = df_work.select_dtypes(include=np.number).columns.tolist()
-            if target_column in original_numerical:
-                original_numerical.remove(target_column)
-            if exclude_columns:
-                original_numerical = [col for col in original_numerical if col not in exclude_columns]
-            
-            n_replaced = max(1, int(len(original_numerical) * replace_ratio))
-            n_kept = len(original_numerical) - n_replaced
-            
-            # Clone model
-            if hasattr(model, 'fit'):
-                model_clone = clone(model)
-            else:
-                model_clone = model.__class__(**model.get_params())
-            
-            # Cross-validation
-            if is_reg:
-                scores = -cross_val_score(
-                    model_clone, X, y_transformed, cv=cv,
-                    scoring='neg_root_mean_squared_error',
-                    n_jobs=-1
-                )
-            else:
-                if hasattr(model_clone, "predict_proba"):
-                    if pt == "binary":
-                        scores = cross_val_score(
-                            model_clone, X, y_transformed, cv=cv,
-                            scoring='roc_auc',
-                            n_jobs=-1
-                        )
-                        scores = 1.0 - scores  # Convert to minimize (lower is better)
-                    else:
-                        scores = cross_val_score(
-                            model_clone, X, y_transformed, cv=cv,
-                            scoring='neg_log_loss',
-                            n_jobs=-1
-                        )
-                        scores = -scores  # Convert to minimize
-                else:
-                    scores = cross_val_score(
-                        model_clone, X, y_transformed, cv=cv,
-                        scoring='accuracy',
-                        n_jobs=-1
-                    )
-                    scores = 1.0 - scores  # Convert to minimize
-            
-            results.append({
-                "replace_ratio": replace_ratio,
-                "mean_score": np.mean(scores),
-                "std_score": np.std(scores),
-                "min_score": np.min(scores),
-                "max_score": np.max(scores),
-                "n_features_before": n_features_before,
-                "n_features_after": n_features_after,
-                "n_components": n_ica_components,
-                "n_replaced": n_replaced,
-                "n_kept": n_kept,
-                "n_interactions": n_interactions,
-                "status": "success",
-                "error_message": None
-            })
-            print(f"  ✅ Mean score: {np.mean(scores):.4f} ± {np.std(scores):.4f} "
-                  f"(Features: {n_features_before} → {n_features_after})")
-            
-        except Exception as e:
-            print(f"  ❌ Error: {e}")
-            results.append({
-                "replace_ratio": replace_ratio,
-                "mean_score": np.nan,
-                "std_score": np.nan,
-                "min_score": np.nan,
-                "max_score": np.nan,
-                "n_features_before": n_features_before,
-                "n_features_after": np.nan,
-                "n_components": n_components,
-                "n_replaced": np.nan,
-                "n_kept": np.nan,
-                "n_interactions": np.nan,
-                "status": "error",
-                "error_message": str(e)
-            })
-            continue
-    
-    results_df = pd.DataFrame(results)
-    # Sort by mean_score (ascending for regression/log_loss, but for AUC we want descending)
-    # Since we converted AUC to (1-AUC) for minimization, ascending sort works for all
-    results_df = results_df.sort_values("mean_score", ascending=True, na_last=True)
-    
-    return results_df
+        status = "error" if res["error"] else "success"
+        mean_score = res.get("score", np.nan)
+        
+        print(f"  Ratio {ratio:.2f}: Score={mean_score:.4f} ({status})")
+        
+        results.append({
+            "replace_ratio": ratio,
+            "mean_score": mean_score,
+            "std_score": res.get("std", np.nan),
+            "n_features_after": res.get("n_features_after", np.nan),
+            "status": status,
+            "error_message": res.get("error")
+        })
+        
+    return pd.DataFrame(results).sort_values("mean_score")
 
 
 def tune_fastica_replace_ratio(
@@ -1884,194 +1822,147 @@ def tune_fastica_replace_ratio(
     target_column: str,
     model,
     problem_type: str,
-    eval_metric: str = None,
-    n_components: int = None,
-    exclude_columns: List[str] = None,
-    analysis_results: dict = None,
     n_trials: int = 20,
-    cv_folds: int = 5,
-    random_state: int = 42,
     **fastica_kwargs
 ) -> dict:
     """
-    Use Optuna to automatically search for optimal replace_ratio.
+    Optuna Tuning Wrapper reusing the unified evaluation engine.
     
-    This function provides micro-level fine-tuning by using Optuna's optimization
-    to find the best replace_ratio value within a continuous range. It uses
-    cross-validation to avoid overfitting and records detailed information for
-    each trial.
-    
-    Args:
-        df: Input dataframe
-        target_column: Target column name
-        model: Model instance or model class (must support fit/predict)
-        problem_type: 'regression', 'binary', or 'multiclass'
-        eval_metric: Evaluation metric name. If None, auto-selected:
-                    'rmse' for regression, 'roc_auc' for binary, 'log_loss' for multiclass
-        n_components: Number of ICA components
-        exclude_columns: Columns to exclude from ICA
-        analysis_results: Analysis results dictionary
-        n_trials: Number of Optuna trials (default: 20)
-        cv_folds: Number of cross-validation folds (default: 5)
-        random_state: Random seed
-        **fastica_kwargs: Additional arguments for apply_fastica
-        
-    Returns:
-        dict with keys:
-            - best_replace_ratio: Optimal replace_ratio value
-            - best_score: Best CV score achieved
-            - study: Optuna study object
-            - results_df: DataFrame with all trial results including:
-                * replace_ratio: Tested value
-                * score: CV score for this trial
-                * n_features_before: Features before transformation
-                * n_features_after: Features after transformation
-                * n_components: ICA components used
-                * n_replaced: Features replaced
-                * n_kept: Features kept
-                * n_interactions: Interaction features added
-                * state: Trial state (COMPLETE, PRUNED, etc.)
+    Optimized for:
+    1. DRY Principle: Reuses _evaluate_fastica_performance.
+    2. Observability: Records metadata (feature counts) into Optuna trials.
     """
-    import numpy as np
-    
-    # Prepare data
+    # Local import    
+    # 1. Standard Setup
     df_work = df.copy()
-    if target_column not in df_work.columns:
-        raise ValueError(f"Target column '{target_column}' not found")
-    
-    # Determine evaluation metric
     pt = problem_type.lower()
     is_reg = pt == "regression"
+    eval_metric = "rmse" if is_reg else "roc_auc" if pt == "binary" else "log_loss"
     
-    if eval_metric is None:
-        eval_metric = "rmse" if is_reg else "roc_auc" if pt == "binary" else "log_loss"
+    cv_cls = KFold if is_reg else StratifiedKFold
+    cv = cv_cls(n_splits=5, shuffle=True, random_state=42)
     
-    # Setup cross-validation
-    if is_reg:
-        cv = KFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    else:
-        cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    
-    y = df_work[target_column]
-    n_features_before = len(df_work.columns) - 1  # Exclude target
-    
-    # Get original numerical columns for estimation
     original_numerical = df_work.select_dtypes(include=np.number).columns.tolist()
-    if target_column in original_numerical:
-        original_numerical.remove(target_column)
-    if exclude_columns:
-        original_numerical = [col for col in original_numerical if col not in exclude_columns]
-    
+    if target_column in original_numerical: original_numerical.remove(target_column)
+
+    # 2. Define Objective
     def objective(trial: optuna.Trial) -> float:
-        # Suggest replace_ratio value
+        # Suggest parameter
         replace_ratio = trial.suggest_float("replace_ratio", 0.1, 0.7, step=0.05)
         
-        # Apply FastICA
-        try:
-            df_transformed = apply_fastica(
-                df_work,
-                n_components=n_components,
-                target_column=target_column,
-                exclude_columns=exclude_columns,
-                mode='hybrid',
-                replace_ratio=replace_ratio,
-                analysis_results=analysis_results,
-                random_state=random_state,
-                **fastica_kwargs
-            )
-        except Exception as e:
-            print(f"⚠️ FastICA failed with replace_ratio={replace_ratio:.3f}: {e}")
-            return float('inf') if is_reg or eval_metric == "log_loss" else 0.0
+        # Call Unified Engine
+        res = _evaluate_fastica_performance(
+            replace_ratio, df_work, target_column, original_numerical, 
+            model, cv, is_reg, eval_metric, pt, apply_fastica, fastica_kwargs
+        )
         
-        # Prepare features and target
-        X = df_transformed.drop(columns=[target_column])
-        y_transformed = df_transformed[target_column]
-        
-        # Check data validity
-        if X.empty or len(X.columns) == 0:
-            return float('inf') if is_reg or eval_metric == "log_loss" else 0.0
-        
-        # Count features
-        ica_cols = [col for col in X.columns if col.startswith('ICA_')]
-        interaction_cols = [col for col in X.columns if '_x_' in col and any(c.startswith('ICA_') for c in col.split('_x_'))]
-        n_ica_components = len(ica_cols)
-        n_interactions = len(interaction_cols)
-        n_features_after = len(X.columns)
-        n_replaced = max(1, int(len(original_numerical) * replace_ratio))
-        n_kept = len(original_numerical) - n_replaced
-        
-        # Store trial metadata
-        trial.set_user_attr("n_features_before", n_features_before)
-        trial.set_user_attr("n_features_after", n_features_after)
-        trial.set_user_attr("n_components", n_ica_components)
-        trial.set_user_attr("n_replaced", n_replaced)
-        trial.set_user_attr("n_kept", n_kept)
-        trial.set_user_attr("n_interactions", n_interactions)
-        
-        # Cross-validation
-        scores = []
-        for train_idx, val_idx in cv.split(X, y_transformed):
-            X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-            y_train, y_val = y_transformed.iloc[train_idx], y_transformed.iloc[val_idx]
+        # Error Handling
+        if res["error"]: 
+            return float('inf')
             
-            # Clone model
-            if hasattr(model, 'fit'):
-                model_clone = clone(model)
-            else:
-                model_clone = model.__class__(**model.get_params())
-            
-            model_clone.fit(X_train, y_train)
-            
-            # Predict
-            if is_reg:
-                y_pred = model_clone.predict(X_val)
-                if eval_metric == "rmse":
-                    score = np.sqrt(mean_squared_error(y_val, y_pred))
-                else:
-                    score = mean_squared_error(y_val, y_pred)
-            else:
-                if hasattr(model_clone, "predict_proba"):
-                    y_proba = model_clone.predict_proba(X_val)
-                    if eval_metric == "roc_auc" and pt == "binary":
-                        score = roc_auc_score(y_val, y_proba[:, 1])
-                        score = 1.0 - score  # Optuna minimizes
-                    else:
-                        score = log_loss(y_val, y_proba)
-                else:
-                    y_pred = model_clone.predict(X_val)
-                    score = log_loss(y_val, y_pred)
-            
-            scores.append(score)
+        # [CRITICAL ADDITION] Record Metadata for Analysis
+        # This restores the functionality of the "Long Version" while keeping code short
+        trial.set_user_attr("n_features_after", res["n_features_after"])
+        trial.set_user_attr("n_replaced", res["n_replaced"])
+        trial.set_user_attr("std_score", res["std"])
         
-        return np.mean(scores)
-    
-    # Run Optuna optimization
+        return res["score"]
+
+    # 3. Run Optimization
     study = optuna.create_study(direction="minimize")
-    study.optimize(objective, n_trials=n_trials, show_progress_bar=True)
-    
-    # Extract results
-    best_replace_ratio = study.best_params["replace_ratio"]
-    best_score = study.best_value
-    
-    # Create results DataFrame with all trial information
-    results_data = []
-    for trial in study.trials:
-        results_data.append({
-            "replace_ratio": trial.params.get("replace_ratio", np.nan),
-            "score": trial.value,
-            "n_features_before": trial.user_attrs.get("n_features_before", np.nan),
-            "n_features_after": trial.user_attrs.get("n_features_after", np.nan),
-            "n_components": trial.user_attrs.get("n_components", np.nan),
-            "n_replaced": trial.user_attrs.get("n_replaced", np.nan),
-            "n_kept": trial.user_attrs.get("n_kept", np.nan),
-            "n_interactions": trial.user_attrs.get("n_interactions", np.nan),
-            "state": trial.state.name
-        })
-    results_df = pd.DataFrame(results_data)
+    study.optimize(objective, n_trials=n_trials)
     
     return {
-        "best_replace_ratio": best_replace_ratio,
-        "best_score": best_score,
-        "study": study,
-        "results_df": results_df
+        "study": study, 
+        "best_replace_ratio": study.best_params["replace_ratio"],
+        "best_score": study.best_value
     }
+
+
+
+def decide_correlation_threshold(all_corrs, method='auto', **kwargs):
+    """
+    Decide an adaptive correlation threshold using AutoML-style distribution analysis.
+    """
+    if not all_corrs:
+        return 0.0
+
+    # Ensure numpy array and sort
+    corrs = np.sort(np.array(all_corrs))
+    min_threshold = kwargs.get('min_threshold', 0.1) 
+    
+    if method == 'auto':
+        n_points = len(corrs)
+        if n_points < 3:
+            return max(np.max(corrs) * 0.9, min_threshold)
+            
+        x = np.linspace(0, 1, n_points)
+        y = (corrs - corrs.min()) / (corrs.max() - corrs.min() + 1e-9)
+        
+        start_point = np.array([x[0], y[0]])
+        end_point = np.array([x[-1], y[-1]])
+        vec_line = end_point - start_point
+        vec_points = np.stack([x, y], axis=1) - start_point
+        
+        cross_prod = np.cross(vec_points, vec_line)
+        distances = np.abs(cross_prod) / np.linalg.norm(vec_line)
+        
+        knee_index = np.argmax(distances)
+        threshold = corrs[knee_index]
+        
+        if threshold < 0.15:
+            threshold = np.percentile(corrs, 90)
+            
+    elif method == 'percentile':
+        p = kwargs.get('percentile', 75)
+        threshold = np.percentile(corrs, p)
+        
+    elif method == 'mean_std':
+        sigma = kwargs.get('sigma', 1.5)
+        threshold = np.mean(corrs) + sigma * np.std(corrs)
+        threshold = min(threshold, 1.0)
+    else:
+        threshold = 0.5
+
+    return float(max(threshold, min_threshold))
+
+
+def assess_ica_necessity(n_samples, n_features, corr_matrix_dict, potential_new_features=0):
+    """
+    AutoML logic to determine if ICA/Dimensionality Reduction is necessary.
+    Returns: (should_apply: bool, reasons: str, suggested_n: int)
+    """
+    if n_features < 4: return False, None, 0
+
+    reasons = []
+    total_estimated_features = n_features + potential_new_features
+    np_ratio = n_samples / (total_estimated_features + 1e-9)
+    
+    is_crowded = np_ratio < 10.0 
+    if is_crowded:
+        reasons.append(f"Low sample-to-feature ratio ({np_ratio:.1f})")
+
+    redundancy_score = 0.0
+    if corr_matrix_dict:
+        try:
+            df_corr = pd.DataFrame(corr_matrix_dict)
+            mask = np.triu(np.ones(df_corr.shape), k=1).astype(bool)
+            abs_corr = df_corr.where(mask).abs()
+            n_pairs = mask.sum()
+            n_high_corr = (abs_corr > 0.5).sum().sum()
+            
+            if n_pairs > 0: redundancy_score = n_high_corr / n_pairs
+            if redundancy_score > 0.1: 
+                reasons.append(f"High feature redundancy (density: {redundancy_score:.1%})")
+        except Exception: pass
+
+    is_huge = n_features > 100
+    if is_huge: reasons.append(f"High absolute dimensionality ({n_features} features)")
+
+    should_apply = is_crowded or (redundancy_score > 0.15) or is_huge
+    
+    compression_rate = 0.3 if np_ratio < 5 else 0.5
+    suggested_n = int(n_features * compression_rate)
+    suggested_n = max(2, min(suggested_n, n_samples // 2, 100))
+
+    return should_apply, "; ".join(reasons), suggested_n

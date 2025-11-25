@@ -324,6 +324,7 @@ elif selected_page == "Model Suggestions":
                             eval_metric=ag_results["eval_metric"],
                             n_trials=30,
                             time_limit=120,
+                            initial_params=ag_results.get("best_model_params"),
                         )
                     st.session_state.modeling_results = {
                         "problem_type": ag_results["problem_type"],

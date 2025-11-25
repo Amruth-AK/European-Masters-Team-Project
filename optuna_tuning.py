@@ -76,34 +76,93 @@ def _choose_model_class(model_family: str, problem_type: str):
     return RandomForestRegressor if is_reg else RandomForestClassifier
 
 
+def _get_search_range( #Add Zhiqi
+    trial: optuna.Trial,
+    param_name: str,
+    default_low: float,
+    default_high: float,
+    ref_params: Dict[str, Any],
+    is_int: bool = False,
+    log: bool = False,
+    step: Optional[float] = None,
+) -> Any:
+    """
+    Helper to define a search range centered around a reference value if available.
+    """
+    kwargs = {}
+    if step is not None:
+        kwargs['step'] = step
+
+    if not ref_params or param_name not in ref_params:
+        if is_int:
+            return trial.suggest_int(param_name, int(default_low), int(default_high), log=log, **kwargs)
+        return trial.suggest_float(param_name, default_low, default_high, log=log, **kwargs)
+
+    ref_val = ref_params[param_name]
+    
+    # If reference is not numeric (e.g. string/None), fallback to default
+    if not isinstance(ref_val, (int, float)):
+         if is_int:
+            return trial.suggest_int(param_name, int(default_low), int(default_high), log=log, **kwargs)
+         return trial.suggest_float(param_name, default_low, default_high, log=log, **kwargs)
+
+    # Define a window around the reference value (e.g., +/- 50% or +/- fixed amount)
+    # We want to be conservative but allow exploration
+    
+    if log:
+        # For log scale, use multiplicative window
+        low = max(default_low, ref_val * 0.5)
+        high = min(default_high, ref_val * 2.0)
+    else:
+        # For linear scale, use additive or multiplicative window
+        # Using a heuristic: +/- 30% of the value, or at least some absolute margin
+        margin = abs(ref_val * 0.3)
+        if margin == 0: margin = 1.0 # Handle zero case
+        
+        low = max(default_low, ref_val - margin)
+        high = min(default_high, ref_val + margin)
+        
+    if is_int:
+        low = int(low)
+        high = int(high)
+        # Ensure low <= high
+        if low > high: low, high = high, low
+        return trial.suggest_int(param_name, low, high, log=log, **kwargs)
+    
+    if low > high: low, high = high, low
+    return trial.suggest_float(param_name, low, high, log=log, **kwargs)
+
+
 def _build_model_params(
     trial: optuna.Trial,
     ModelClass,
     model_family: str,
     problem_type: str,
+    reference_params: Optional[Dict[str, Any]] = None,# Add Zhiqi
 ) -> Dict[str, Any]:
     """
     Define Optuna search space for the chosen model class.
+    If reference_params are provided, the search space is narrowed around them.
     """
     mf = (model_family or "").lower()
     pt = (problem_type or "").lower()
     is_reg = pt == "regression"
     params: Dict[str, Any] = {}
+    
+    ref = reference_params or {} # Add Zhiqi
 
     # --- LightGBM ---
     if ModelClass in (lgb.LGBMRegressor, lgb.LGBMClassifier):
         params = {
-            "n_estimators": trial.suggest_int("n_estimators", 100, 800),
-            "num_leaves": trial.suggest_int("num_leaves", 31, 255),
-            "learning_rate": trial.suggest_float(
-                "learning_rate", 1e-3, 0.3, log=True
-            ),
-            "max_depth": trial.suggest_int("max_depth", -1, 16),
-            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
-            "min_child_samples": trial.suggest_int("min_child_samples", 5, 100),
-            "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
-            "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
+            "n_estimators": _get_search_range(trial, "n_estimators", 100, 1000, ref, is_int=True),
+            "num_leaves": _get_search_range(trial, "num_leaves", 20, 300, ref, is_int=True),
+            "learning_rate": _get_search_range(trial, "learning_rate", 1e-3, 0.3, ref, log=True),
+            "max_depth": _get_search_range(trial, "max_depth", -1, 20, ref, is_int=True),
+            "subsample": _get_search_range(trial, "subsample", 0.5, 1.0, ref),
+            "colsample_bytree": _get_search_range(trial, "colsample_bytree", 0.5, 1.0, ref),
+            "min_child_samples": _get_search_range(trial, "min_child_samples", 5, 100, ref, is_int=True),
+            "reg_lambda": _get_search_range(trial, "reg_lambda", 1e-4, 10.0, ref, log=True),
+            "reg_alpha": _get_search_range(trial, "reg_alpha", 1e-4, 10.0, ref, log=True),
             "random_state": 42,
             "n_jobs": -1,
         }
@@ -111,19 +170,15 @@ def _build_model_params(
     # --- XGBoost ---
     elif ModelClass in (xgb.XGBRegressor, xgb.XGBClassifier):
         params = {
-            "n_estimators": trial.suggest_int("n_estimators", 100, 800),
-            "max_depth": trial.suggest_int("max_depth", 3, 12),
-            "learning_rate": trial.suggest_float(
-                "learning_rate", 1e-3, 0.3, log=True
-            ),
-            "subsample": trial.suggest_float("subsample", 0.5, 1.0),
-            "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 1.0),
-            "min_child_weight": trial.suggest_float(
-                "min_child_weight", 1e-2, 10.0, log=True
-            ),
-            "gamma": trial.suggest_float("gamma", 0.0, 5.0),
-            "reg_lambda": trial.suggest_float("reg_lambda", 1e-3, 10.0, log=True),
-            "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
+            "n_estimators": _get_search_range(trial, "n_estimators", 100, 1000, ref, is_int=True),
+            "max_depth": _get_search_range(trial, "max_depth", 3, 15, ref, is_int=True),
+            "learning_rate": _get_search_range(trial, "learning_rate", 1e-3, 0.3, ref, log=True),
+            "subsample": _get_search_range(trial, "subsample", 0.5, 1.0, ref),
+            "colsample_bytree": _get_search_range(trial, "colsample_bytree", 0.5, 1.0, ref),
+            "min_child_weight": _get_search_range(trial, "min_child_weight", 1e-2, 10.0, ref, log=True),
+            "gamma": _get_search_range(trial, "gamma", 0.0, 5.0, ref),
+            "reg_lambda": _get_search_range(trial, "reg_lambda", 1e-4, 10.0, ref, log=True),
+            "reg_alpha": _get_search_range(trial, "reg_alpha", 1e-4, 10.0, ref, log=True),
             "random_state": 42,
             "n_jobs": -1,
             "tree_method": "hist",
@@ -132,17 +187,13 @@ def _build_model_params(
     # --- CatBoost ---
     elif ModelClass in (cb.CatBoostRegressor, cb.CatBoostClassifier):
         params = {
-            "depth": trial.suggest_int("depth", 4, 10),
-            "learning_rate": trial.suggest_float(
-                "learning_rate", 1e-3, 0.3, log=True
-            ),
-            "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0),
-            "random_strength": trial.suggest_float("random_strength", 0.0, 1.0),
-            "bagging_temperature": trial.suggest_float(
-                "bagging_temperature", 0.0, 5.0
-            ),
-            "border_count": trial.suggest_int("border_count", 32, 255),
-            "n_estimators": trial.suggest_int("n_estimators", 200, 1000),
+            "depth": _get_search_range(trial, "depth", 4, 10, ref, is_int=True),
+            "learning_rate": _get_search_range(trial, "learning_rate", 1e-3, 0.3, ref, log=True),
+            "l2_leaf_reg": _get_search_range(trial, "l2_leaf_reg", 1.0, 10.0, ref),
+            "random_strength": _get_search_range(trial, "random_strength", 0.0, 1.0, ref),
+            "bagging_temperature": _get_search_range(trial, "bagging_temperature", 0.0, 5.0, ref),
+            "border_count": _get_search_range(trial, "border_count", 32, 255, ref, is_int=True),
+            "n_estimators": _get_search_range(trial, "n_estimators", 200, 1000, ref, is_int=True),
             "random_state": 42,
             "verbose": 0,
         }
@@ -160,10 +211,10 @@ def _build_model_params(
         ExtraTreesClassifier,
     ):
         params = {
-            "n_estimators": trial.suggest_int("n_estimators", 100, 500),
-            "max_depth": trial.suggest_int("max_depth", 3, 30),
-            "min_samples_split": trial.suggest_int("min_samples_split", 2, 20),
-            "min_samples_leaf": trial.suggest_int("min_samples_leaf", 1, 10),
+            "n_estimators": _get_search_range(trial, "n_estimators", 100, 500, ref, is_int=True),
+            "max_depth": _get_search_range(trial, "max_depth", 3, 30, ref, is_int=True),
+            "min_samples_split": _get_search_range(trial, "min_samples_split", 2, 20, ref, is_int=True),
+            "min_samples_leaf": _get_search_range(trial, "min_samples_leaf", 1, 10, ref, is_int=True),
             "max_features": trial.suggest_categorical(
                 "max_features", ["sqrt", "log2", None]
             ),
@@ -175,10 +226,10 @@ def _build_model_params(
     # --- KNN ---
     elif ModelClass in (KNeighborsRegressor, KNeighborsClassifier):
         params = {
-            "n_neighbors": trial.suggest_int("n_neighbors", 3, 50),
+            "n_neighbors": _get_search_range(trial, "n_neighbors", 3, 50, ref, is_int=True),
             "weights": trial.suggest_categorical("weights", ["uniform", "distance"]),
             "p": trial.suggest_int("p", 1, 2),
-            "leaf_size": trial.suggest_int("leaf_size", 20, 60),
+            "leaf_size": _get_search_range(trial, "leaf_size", 20, 60, ref, is_int=True),
         }
 
     # --- MLP ---
@@ -194,10 +245,8 @@ def _build_model_params(
                 "hidden_layer_sizes", hidden_layer_options
             ),
             "activation": trial.suggest_categorical("activation", ["relu", "tanh"]),
-            "alpha": trial.suggest_float("alpha", 1e-5, 1e-1, log=True),
-            "learning_rate_init": trial.suggest_float(
-                "learning_rate_init", 1e-4, 1e-2, log=True
-            ),
+            "alpha": _get_search_range(trial, "alpha", 1e-5, 1e-1, ref, log=True),
+            "learning_rate_init": _get_search_range(trial, "learning_rate_init", 1e-4, 1e-2, ref, log=True),
             "max_iter": 200,
             "random_state": 42,
         }
@@ -208,7 +257,7 @@ def _build_model_params(
 
     elif ModelClass is LogisticRegression:
         params = {
-            "C": trial.suggest_float("C", 1e-3, 10.0, log=True),
+            "C": _get_search_range(trial, "C", 1e-3, 10.0, ref, log=True),
             "penalty": trial.suggest_categorical("penalty", ["l2"]),
             "solver": trial.suggest_categorical("solver", ["lbfgs", "saga"]),
             "max_iter": 1000,
@@ -232,36 +281,10 @@ def tune_model_with_optuna(
     eval_metric: str,
     n_trials: int = 30,
     time_limit: Optional[int] = None,
+    initial_params: Optional[Dict[str, Any]] = None,#Add Zhiqi
 ) -> Dict[str, Any]:
     """
-    Tune hyperparameters with Optuna for the SAME model family that AutoGluon chose.
-
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Preprocessed dataset used for modeling.
-    target_column : str
-        Target column name.
-    model_family : str
-        Coarse family from AutoGluon ("lightgbm", "xgboost", "catboost", etc.).
-    problem_type : str
-        "regression", "binary", or "multiclass".
-    eval_metric : str
-        "root_mean_squared_error", "roc_auc", or "log_loss".
-        We always define the objective so that LOWER is better.
-    n_trials : int
-        Number of Optuna trials.
-
-    Returns
-    -------
-    dict with keys:
-        - best_model_class : str
-        - best_params      : Dict[str, Any]
-        - best_model       : fitted model (trained on ALL data)
-        - best_objective   : float (value minimized by Optuna)
-        - best_eval_score  : float (human-friendly metric: RMSE / AUC / log_loss)
-        - metric_name      : str (original metric name)
-        - study            : Optuna study object
+    Tune hyperparameters with Optuna, optionally starting from AutoGluon's best parameters.
     """
     if target_column not in df.columns:
         raise ValueError("Target column not found in dataframe.")
@@ -294,7 +317,8 @@ def tune_model_with_optuna(
 
     def objective(trial: optuna.Trial) -> float:
         ModelClass = _choose_model_class(model_family, problem_type)
-        params = _build_model_params(trial, ModelClass, model_family, problem_type)
+        # Pass initial_params as reference to define targeted search space # Add Zhiqi
+        params = _build_model_params(trial, ModelClass, model_family, problem_type, reference_params=initial_params)
 
         # Special defaults for CatBoost
         if ModelClass in (cb.CatBoostRegressor, cb.CatBoostClassifier):
@@ -332,6 +356,17 @@ def tune_model_with_optuna(
         return log_loss(y_valid, proba)
 
     study = optuna.create_study(direction="minimize")
+    
+    # Enqueue the initial parameters to ensure they are evaluated first
+    if initial_params:
+        print(f"Enqueuing initial parameters from AutoGluon: {initial_params}")
+        # We need to filter initial_params to only include those that are in the search space
+        # But Optuna's enqueue_trial is robust to extra params usually, or we can just pass it.
+        # However, we need to make sure the keys match what _build_model_params expects.
+        # AutoGluon params might have different names or extra keys. 
+        # For now, we pass it as is, Optuna will ignore unknown keys or we might need to map them.
+        # Given the complexity of mapping, we'll try passing them directly.
+        study.enqueue_trial(initial_params)
 
     # If time_limit is set (in seconds), stop after that many seconds overall
     if time_limit is not None:

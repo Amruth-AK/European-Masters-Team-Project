@@ -11,7 +11,6 @@ from sklearn.preprocessing import StandardScaler
 
 from preprocessing_registry import FUNC_MAP
 
-
 # ---------------------------------------------------------------------
 #  Train-only vs value-level transformations
 # ---------------------------------------------------------------------
@@ -291,22 +290,75 @@ def _fit_corr_features_step(
     features: List[Dict[str, Any]] = []
 
     for new_col in new_cols:
-        op, col1, col2 = _decode_corr_feature_name(new_col)
-        if op is None or col1 not in base_df.columns or col2 not in base_df.columns:
-            # If we cannot decode, skip recording; the column will still exist in df_proc
+        # Robust decoding: try all patterns and all split positions
+        found_match = False
+        best_op = None
+        best_c1 = None
+        best_c2 = None
+        
+        # Patterns from _decode_corr_feature_name
+        patterns = [
+            ("product", "_x_"),
+            ("ratio", "_div_"),
+            ("difference", "_minus_"),
+            ("sum", "_plus_"),
+            ("interaction", "_interact_"),
+        ]
+        
+        valid_cols = set(df_proc.columns)
+        
+        for op, token in patterns:
+            if token not in new_col:
+                continue
+                
+            # Try splitting at every occurrence of the token
+            parts = new_col.split(token)
+            # We need to reconstruct c1 and c2 from parts
+            # e.g. A_x_B_x_C with token _x_ -> parts [A, B, C]
+            # Split could be (A, B_x_C) or (A_x_B, C)
+            
+            # Optimization: The generator usually puts the complex feature first (A_x_B) and simple second (C)
+            # So we iterate splits.
+            # However, simple split(token) consumes ALL tokens.
+            # We want to find a partition.
+            
+            # Let's use string find/rfind approach
+            start = 0
+            while True:
+                idx = new_col.find(token, start)
+                if idx == -1:
+                    break
+                
+                c1 = new_col[:idx]
+                c2 = new_col[idx + len(token):]
+                
+                if c1 in valid_cols and c2 in valid_cols:
+                    best_op = op
+                    best_c1 = c1
+                    best_c2 = c2
+                    found_match = True
+                    break
+                
+                start = idx + len(token)
+            
+            if found_match:
+                break
+        
+        if not found_match:
             continue
 
         feat_spec: Dict[str, Any] = {
             "name": new_col,
-            "op": op,
-            "col1": col1,
-            "col2": col2,
+            "op": best_op,
+            "col1": best_c1,
+            "col2": best_c2,
         }
 
-        if op == "interaction":
+        if best_op == "interaction":
             # Store training means so we can use the same centering on test
-            feat_spec["col1_mean"] = float(base_df[col1].mean())
-            feat_spec["col2_mean"] = float(base_df[col2].mean())
+            # Use df_proc because c1/c2 might be newly created features (not in base_df)
+            feat_spec["col1_mean"] = float(df_proc[best_c1].mean())
+            feat_spec["col2_mean"] = float(df_proc[best_c2].mean())
 
         features.append(feat_spec)
 
@@ -442,6 +494,41 @@ def _fit_fastica_step(
     for i, cname in enumerate(component_names):
         df_proc[cname] = S[:, i]
 
+    # 5) Handle mode (hybrid/replace/add)
+    mode = kwargs.get("mode", "hybrid")
+    replace_ratio = kwargs.get("replace_ratio")
+    
+    cols_to_drop = []
+    
+    if mode == 'replace':
+        cols_to_drop = numerical_cols
+        print(f"[_fit_fastica_step] Mode 'replace': Dropping {len(cols_to_drop)} original features.")
+        
+    elif mode == 'hybrid':
+        # Calculate ratio if not provided
+        if replace_ratio is None:
+            replace_ratio = _calculate_intelligent_replace_ratio(
+                df_proc,
+                numerical_cols,
+                n_components,
+                analysis_results=analysis_results
+            )
+            
+        # Identify features to replace
+        n_to_replace = int(len(numerical_cols) * replace_ratio)
+        cols_to_replace, cols_to_keep = _select_features_to_replace(
+            df_proc,
+            numerical_cols,
+            n_to_replace,
+            analysis_results
+        )
+        cols_to_drop = cols_to_replace
+        print(f"[_fit_fastica_step] Mode 'hybrid': Dropping {len(cols_to_drop)} features (ratio={replace_ratio:.2f}).")
+        
+    # Apply drops
+    if cols_to_drop:
+        df_proc = df_proc.drop(columns=cols_to_drop)
+
     fitted = FittedStep(
         name="apply_fastica",
         params={
@@ -449,6 +536,7 @@ def _fit_fastica_step(
             "scaler": scaler,
             "ica": ica,
             "component_names": component_names,
+            "cols_to_drop": cols_to_drop, # Store dropped columns to replicate on test
         },
         kwargs=kwargs,
     )
@@ -491,6 +579,14 @@ def _transform_fastica_step(df: pd.DataFrame, step: FittedStep):
 
     for i, cname in enumerate(component_names):
         df_proc[cname] = S[:, i]
+
+    # Drop columns if specified (for hybrid/replace mode)
+    cols_to_drop = params.get("cols_to_drop", [])
+    if cols_to_drop:
+        # Only drop columns that exist
+        existing_drops = [c for c in cols_to_drop if c in df_proc.columns]
+        if existing_drops:
+            df_proc = df_proc.drop(columns=existing_drops)
 
     return df_proc
 
@@ -558,6 +654,19 @@ def fit_preprocessing_pipeline(
         if name == "apply_fastica":
             df_proc, fitted = _fit_fastica_step(df_proc, kwargs, analysis_results)
             fitted_steps.append(fitted)
+            continue
+
+        if name == "combine_categorical_features":
+            # This is a stateless transform, but we need to record it to replay it
+            # It doesn't learn parameters, but it changes the schema.
+            # We treat it as a "stateless" step that is just re-executed.
+            try:
+                func = FUNC_MAP.get(name)
+                df_proc = func(df_proc, **kwargs)
+                fitted_steps.append(FittedStep(name=name, params={}, kwargs=kwargs))
+            except Exception as e:
+                print(f"[fit_preprocessing_pipeline] Error in {name}: {e}")
+                fitted_steps.append(FittedStep(name=name, params={}, kwargs=kwargs))
             continue
 
         # --- Train-only row-removal steps ---
@@ -641,7 +750,17 @@ def apply_fitted_pipeline(
             df_proc = _transform_fastica_step(df_proc, step)
             continue
 
+        elif name == "combine_categorical_features":
+            func = FUNC_MAP.get(name)
+            if func:
+                try:
+                    df_proc = func(df_proc, **kwargs)
+                except Exception as e:
+                    print(f"[apply_fitted_pipeline] Error in {name}: {e}")
+            continue
+
         # --- Default: stateless re-apply ---
+        # Generic fallback for stateless transforms (if any others exist)
         func = FUNC_MAP.get(name)
         if func is not None:
             try:
