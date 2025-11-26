@@ -657,8 +657,25 @@ def _fit_fastica_step(
         
     # Apply drops
     if cols_to_drop:
-        df_proc = df_proc.drop(columns=cols_to_drop)
-
+        print(f"[_fit_fastica_step] Dropping {len(cols_to_drop)} features:")
+        third_order_features = [c for c in cols_to_drop 
+                            if (c.count('_x_') + c.count('_div_') + c.count('_plus_') + c.count('_minus_')) >= 2]
+        second_order_features = [c for c in cols_to_drop 
+                             if c not in third_order_features 
+                             and any(x in c for x in ['_x_', '_div_', '_plus_', '_minus_'])]
+        original_features = [c for c in cols_to_drop 
+                         if c not in second_order_features 
+                         and c not in third_order_features 
+                         and 'ICA_' not in c]
+        
+        if original_features:
+            print(f"   - Original features ({len(original_features)}): {original_features[:5]}{'...' if len(original_features) > 5 else ''}")
+        if second_order_features:
+            print(f"   - 2nd-order features ({len(second_order_features)}): {second_order_features[:5]}{'...' if len(second_order_features) > 5 else ''}")
+        if third_order_features:
+            print(f"   - 3rd-order features ({len(third_order_features)}): {third_order_features[:5]}{'...' if len(third_order_features) > 5 else ''}")
+    
+    
     fitted = FittedStep(
         name="apply_fastica",
         params={

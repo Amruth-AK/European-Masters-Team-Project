@@ -911,7 +911,7 @@ def create_features_from_high_correlation(
     use_correlation_filter: bool = True,
     min_cardinality: int = 3,
     max_new_features: int = 500,
-    corr_filter_threshold: float = 0.95,
+    corr_filter_threshold: float = 0.9,
     min_variance: float = 1e-6,
     **kwargs
 ) -> pd.DataFrame:
@@ -1058,6 +1058,15 @@ def create_features_from_high_correlation(
         top_second_for_third = kwargs.get('top_second_for_third', 50)
         top_original_for_third = kwargs.get('top_original_for_third', 30)
         
+        # Debugging
+        print(f"🔍 [Debug] Before 3rd-order generation:")
+        print(f"   candidate_df shape: {candidate_df.shape}")
+        print(f"   candidate_df columns: {len(candidate_df.columns)}")
+        print(f"   df shape: {df.shape}")
+        print(f"   target_column in df: {target_column in df.columns}")
+        print(f"   Index match: {candidate_df.index.equals(df.index)}")
+
+        
         third_order_df = _generate_third_order_features(
             df=df,
             second_order_features=candidate_df,
@@ -1196,7 +1205,7 @@ def _apply_basic_filter(df: pd.DataFrame, min_cardinality: int, min_variance: fl
     return df_filtered
 
 
-def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.95) -> pd.DataFrame:
+def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.9) -> pd.DataFrame:
     """
     Remove redundant features with high correlation using a greedy strategy.
     
@@ -1206,7 +1215,7 @@ def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.95) -> pd.D
     
     Args:
         df: Input DataFrame.
-        threshold: Correlation threshold (default 0.95).
+        threshold: Correlation threshold (default 0.9).
         
     Returns:
         pd.DataFrame: DataFrame with redundant features removed.
@@ -1284,17 +1293,42 @@ def _generate_third_order_features(
     if not target_column or target_column not in df.columns:
         print("  ℹ️ [3rd Order] Target column missing. Skipping.")
         return pd.DataFrame()
+
+    target_series = df[target_column]
+    if not pd.api.types.is_numeric_dtype(target_series):
+        le = LabelEncoder()
+        target_series = pd.Series(
+            le.fit_transform(target_series.astype(str)),
+            index=target_series.index,
+            name=target_column
+        )
+        print(f"  ℹ️ [3rd Order] Target column is categorical, using label encoding for correlation calculation.")
+    else:
+        target_series = df[target_column]
+
     
-    # 2. Rank 2nd Order Features (The "Elites")
+    # 2. Rank 2nd Order Features 
     second_corrs = {}
     for col in second_order_features.columns:
         try:
-            val = abs(second_order_features[col].corr(df[target_column]))
-            if pd.notna(val): second_corrs[col] = val
-        except: continue
+            series1 = second_order_features[col]
+            common_index = series1.index.intersection(target_series.index)
+            if len(common_index) < 2:
+                continue
+            aligned_s1 = series1.loc[common_index]
+            aligned_s2 = target_series.loc[common_index]
+
+            val = abs(aligned_s1.corr(aligned_s2))
+            if pd.notna(val):
+                second_corrs[col] = val
+        except Exception as e:
+            print(f"  ⚠️ [3rd Order] Failed to compute correlation for {col}: {e}")
+            continue
         
     if not second_corrs:
         print("  ℹ️ [3rd Order] No valid 2nd-order features found.")
+        print(f"     Debug: second_order_features has {len(second_order_features.columns)} columns")
+        print(f"     Debug: target_column '{target_column}' in df: {target_column in df.columns}")
         return pd.DataFrame()
         
     top_second = sorted(second_corrs, key=second_corrs.get, reverse=True)[:top_second_for_third]
@@ -1304,9 +1338,19 @@ def _generate_third_order_features(
     for col in original_features:
         if col in df.columns and col != target_column:
             try:
-                val = abs(df[col].corr(df[target_column]))
-                if pd.notna(val): orig_corrs[col] = val
-            except: continue
+                common_index = df[col].index.intersection(target_series.index)
+                if len(common_index) < 2:
+                    continue
+
+
+                aligned_col = df[col].loc[common_index]
+                aligned_target = target_series.loc[common_index]
+                val = abs(aligned_col.corr(aligned_target))
+                if pd.notna(val): 
+                    orig_corrs[col] = val
+                
+            except Exception as e:
+                continue
             
     top_orig = sorted(orig_corrs, key=orig_corrs.get, reverse=True)[:top_original_for_third]
     
@@ -1352,9 +1396,17 @@ def _generate_third_order_features(
     final_corrs = {}
     for col in cand_df.columns:
         try:
-            val = abs(cand_df[col].corr(df[target_column]))
+            series_col = cand_df[col]
+            common_index = series_col.index.intersection(target_series.index)
+            if len(common_index) < 2:
+                continue
+
+            aligned_col = series_col.loc[common_index]
+            aligned_target = target_series.loc[common_index]
+            val = abs(aligned_col.corr(aligned_target))
             if pd.notna(val): final_corrs[col] = val
-        except: continue
+        except Exception as e:
+            continue
         
     best_features = sorted(final_corrs, key=final_corrs.get, reverse=True)[:max_third_order]
     
@@ -1744,6 +1796,17 @@ def _select_features_to_replace(
         except Exception:
             # Absolute fallback if something goes wrong
             pass
+    else:
+        try:
+            variances = df[numerical_cols].var().fillna(0)
+            for col in numerical_cols:
+                if scores.get(col, 0.0) == 0.0:  # No correlation info available
+                    var_score = variances.get(col, 0.0)
+                    # Use a small positive value for zero-variance features to avoid confusion
+                    scores[col] = var_score if var_score > 0 else 1e-10
+        except Exception:
+            pass
+
 
     # 5. Sort: Lowest Score -> Replace First
     # Primary sort key: Score (ascending). Secondary key: Name (for deterministic tie-breaking)
