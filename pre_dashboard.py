@@ -115,47 +115,6 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
 
             st.divider()
 
-        # Special UI for FastICA Tuning
-        if step_name == "FastICA Feature Extraction":
-            st.markdown("#### 🧠 Auto-Tuning (Optional)")
-            st.caption("Optimize the `replace_ratio` using Optuna to find the best balance between original features and ICA components.")
-            
-            col_tune, col_res = st.columns([1, 2])
-            with col_tune:
-                if st.button("Run FastICA Tuning", key="tune_fastica_btn"):
-                    with st.spinner("Tuning FastICA replace_ratio... (this may take a minute)"):
-                        target_col = st.session_state.target_column
-                        if target_col:
-                            # Simple heuristic for model selection
-                            y = current_df[target_col]
-                            is_numeric = pd.api.types.is_numeric_dtype(y)
-                            if is_numeric and y.nunique() > 20:
-                                problem_type = "regression"
-                                model = LinearRegression()
-                            else:
-                                problem_type = "classification"
-                                model = LogisticRegression()
-                                
-                            try:
-                                tuning_results = tune_fastica_replace_ratio(
-                                    df=current_df,
-                                    target_column=target_col,
-                                    model=model,
-                                    problem_type=problem_type,
-                                    n_trials=10
-                                )
-                                best_ratio = tuning_results['best_replace_ratio']
-                                st.session_state.fastica_replace_ratio = best_ratio
-                                st.success(f"Best replace_ratio: {best_ratio:.2f}")
-                            except Exception as e:
-                                st.error(f"Tuning failed: {e}")
-                        else:
-                            st.error("Target column not defined.")
-
-            with col_res:
-                if "fastica_replace_ratio" in st.session_state:
-                    st.info(f"✅ Using tuned ratio: **{st.session_state.fastica_replace_ratio:.2f}**")
-
     # Buttons
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
