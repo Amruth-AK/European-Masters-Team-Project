@@ -477,9 +477,14 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
         col for col, dtype in data_types.items()
         if ('int' in dtype or 'float' in dtype) and col != target_column
     ]
-    id_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
-    numerical_cols = [col for col in numerical_cols if not any(k in col.lower() for k in id_keywords)]
-    
+    #id_keywords = ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk']
+    #numerical_cols = [col for col in numerical_cols if not any(k in col.lower() for k in id_keywords)]
+    numerical_cols = [
+        col for col in numerical_cols 
+        if not col.lower().endswith("_is_missing") 
+       #and not any(k in col.lower() for k in ['id', 'index', 'uid', 'key', 'identifier', '_id', 'pk'])
+    ]
+
     # Filter matrix to only valid numerical columns
     valid_cols = [c for c in numerical_cols if c in corr_matrix.index]
     if len(valid_cols) < 2:

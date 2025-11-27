@@ -946,7 +946,10 @@ def create_features_from_high_correlation(
     df = df.copy()
     
     # 1. Prepare numerical columns
-    numerical_cols = df.select_dtypes(include=np.number).columns.tolist()
+    numerical_cols = [
+        c for c in df.select_dtypes(include=np.number).columns
+        if not c.lower().endswith("_is_missing") and not c.startswith("ICA_")
+    ]
     if exclude_columns:
         numerical_cols = [col for col in numerical_cols if col not in exclude_columns]
     
@@ -1462,7 +1465,10 @@ def apply_fastica(
     df = df.copy()
 
     # 1. Select numerical columns
-    numerical_cols = df.select_dtypes(include=np.number).columns.tolist()
+    numerical_cols = [
+        col for col in df.select_dtypes(include=np.number).columns
+        if not col.endswith("_is_missing")
+    ]
 
     # 2. Exclude target and specified columns
     if exclude_columns:

@@ -566,6 +566,7 @@ def _fit_fastica_step(
     numerical_cols = [
         col for col in df_proc.columns
         if pd.api.types.is_numeric_dtype(df_proc[col])
+        and not col.endswith("_is_missing")
     ]
     if target_column in numerical_cols:
         numerical_cols.remove(target_column)
