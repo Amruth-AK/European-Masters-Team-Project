@@ -98,7 +98,7 @@ def run_preprocessing_dashboard() -> pd.DataFrame:
     selected_suggestions_list = []
 
     for step_name, suggestions in valid_steps:
-        with st.expander(f"🔹 {step_name}", expanded=True):
+        with st.expander(f"🔹 {step_name}", expanded=False):
             for i, sug in enumerate(suggestions):
                 key = f"select_{step_name}_{i}"
                 col_chk, col_det = st.columns([0.05, 0.95])

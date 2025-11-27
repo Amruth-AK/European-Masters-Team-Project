@@ -39,13 +39,14 @@ def suggest_missing_value_handling(analysis_results: dict, target_column: str = 
             continue
 
         # --- Always Suggest Indicator ---
-        suggestions.append({
-            'feature': col,
-            'issue': f'{missing_pct:.2f}% missing. Missingness pattern might be predictive.',
-            'suggestion': 'Add "Is Missing" indicator.',
-            'function_to_call': 'add_missing_indicator',
-            'kwargs': {'columns': col}
-        })
+        if missing_pct >= 1:
+            suggestions.append({
+                'feature': col,
+                'issue': f'{missing_pct:.2f}% missing. Missingness pattern might be predictive.',
+                'suggestion': 'Add "Is Missing" indicator.',
+                'function_to_call': 'add_missing_indicator',
+                'kwargs': {'columns': col}
+            })
 
         # --- Rule 2: High Missingness (>30%) -> Adaptive Constant
         if missing_pct > 30:
@@ -519,10 +520,7 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
     # (We only need top 10 for the message, so we don't need to collect ALL of them here manually)
     # Let's just grab the top ones from our vectorized data for the preview
     corr_series = corr_matrix.where(mask).stack()
-    high_corr_series = corr_series[
-    (corr_series.abs() >= correlation_threshold) & 
-    (corr_series.abs() < 0.9)  
-]
+    high_corr_series = corr_series[corr_series.abs() >= correlation_threshold]
     
     # Sort by absolute value descending
     high_corr_series = high_corr_series.iloc[np.argsort(-high_corr_series.abs().values)]
@@ -561,13 +559,13 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
         )
         suggestion_msg = (
             f"Even with low correlations, interaction features can capture non-linear patterns.\n"
-            f" **Top feature pairs to be combined:** \n{preview_str}"
+            f"**Top feature pairs to be combined:**\n{preview_str}"
         )
     else:
         issue_msg = f"Found {num_high_pairs} pairs with |corr| >= {correlation_threshold:.2f}"
         suggestion_msg = (
             f"Create interaction features from {num_high_pairs} feature pairs.\n"
-            f" **Top feature pairs to be combined:** \n{preview_str}"
+            f"**Top feature pairs to be combined:**\n{preview_str}"
         )
 
     suggestions.append({
@@ -582,7 +580,7 @@ def suggest_correlation_based_features(analysis_results: dict, target_column: st
             'use_correlation_filter': True,
             'min_cardinality': 3,
             'max_new_features': max_new_features,
-            'corr_filter_threshold': 0.9,
+            'corr_filter_threshold': 0.92,
             'min_variance': 1e-5,
             'target_column': target_column,
             'generate_third_order': True,
