@@ -21,15 +21,14 @@ st.set_page_config(
 # ======================================
 default_states = {
     "df": None,
+    "pre_df": None,
     "analysis_results": None,
     "target_column": None,
     "id_columns_to_ignore": None,
-    "pre_status": None,
-    "pre_df": None,
-    "modeling_results": None,
     "data_schema": None,
     "transformation_pipeline": None,
     "fitted_pipeline": None,
+    "pre_status": None,
     "prediction_results_df": None,
     "test_metric_name": None,
     "test_metric_value": None,
@@ -39,10 +38,11 @@ for key, value in default_states.items():
     if key not in st.session_state:
         st.session_state[key] = value
 
+# Sidebar state to persist page and subpage
 if "sidebar_state" not in st.session_state:
     st.session_state.sidebar_state = {
-        "expanded_analysis": True,
         "selected_page": "Home",
+        "expanded_analysis": True,
         "selected_analysis_subpage": "General Info"
     }
 
@@ -67,13 +67,13 @@ def display_home_page():
     st.title("🚀 Interactive Data Analysis Tool")
     st.write("Upload your dataset to begin a comprehensive analysis and model evaluation.")
 
-    uploaded_file = st.file_uploader("📂 Upload your CSV file", type=["csv"])
-
+    uploaded_file = st.file_uploader("📂 Upload your CSV file", type=["csv"], key="file_uploader")
     if uploaded_file is not None:
         try:
             st.session_state.df = pd.read_csv(uploaded_file)
+            # Clear dependent states
             for key in default_states:
-                if key != "df":
+                if key not in ["df"]:
                     st.session_state[key] = None
             st.success("✅ File uploaded successfully!")
         except Exception as e:
@@ -83,7 +83,7 @@ def display_home_page():
     if st.session_state.df is not None:
         st.dataframe(st.session_state.df.head(), use_container_width=True)
 
-        # Column Type Adjustment
+        # --- Column Type Adjustment ---
         with st.expander("🔧 Manually Adjust Column Data Types", expanded=False):
             st.info("Options are restricted to prevent invalid conversions.")
             dtype_options = {"Numerical": "float64", "Categorical": "category", "Datetime": "datetime64[ns]"}
@@ -123,7 +123,7 @@ def display_home_page():
             st.session_state.df = modified_df
             st.session_state.data_schema = modified_df.dtypes.to_dict()
 
-        # ID Column Selection
+        # --- ID Column Selection ---
         st.subheader("⚙️ Configure Identifier Columns")
         st.info("These columns will be ignored in analysis.")
         if st.session_state.id_columns_to_ignore is None:
@@ -138,13 +138,13 @@ def display_home_page():
         )
         st.session_state.id_columns_to_ignore = selected_id_cols
 
-        # Target Column Selection
+        # --- Target Column Selection ---
         st.session_state.target_column = st.selectbox(
             "🎯 Select the target column",
             options=[col for col in st.session_state.df.columns if col not in st.session_state.id_columns_to_ignore],
         )
 
-        # Action Buttons
+        # --- Action Buttons ---
         col1, col2 = st.columns([1, 1])
         if col1.button("📊 Run Data Analysis", use_container_width=True):
             with st.spinner("Running analysis..."):
@@ -161,31 +161,23 @@ def display_home_page():
                 st.session_state[key] = None
             st.rerun()
 
-
 # ======================================
-# SIDEBAR NAVIGATION (Modern Tree)
+# SIDEBAR NAVIGATION
 # ======================================
 st.sidebar.title("📚 Navigation")
 
-# HOME BUTTON
+# Home
 if st.sidebar.button("🏠 Home"):
     st.session_state.sidebar_state["selected_page"] = "Home"
 
-# ANALYSIS BUTTON
+# Analysis
 if st.sidebar.button("📊 Analysis"):
     st.session_state.sidebar_state["selected_page"] = "Analysis"
     st.session_state.sidebar_state["expanded_analysis"] = not st.session_state.sidebar_state["expanded_analysis"]
 
-# Analysis Subpages
 analysis_subpages = [
-    "General Info",
-    "Missing Values",
-    "Descriptive Statistics",
-    "Distributions",
-    "Categorical Info",
-    "Correlations",
-    "Outlier Info",
-    "Duplicate Analysis"
+    "General Info", "Missing Values", "Descriptive Statistics", "Distributions",
+    "Categorical Info", "Correlations", "Outlier Info", "Duplicate Analysis"
 ]
 
 if st.session_state.sidebar_state["selected_page"] == "Analysis" and st.session_state.sidebar_state["expanded_analysis"]:
@@ -193,11 +185,11 @@ if st.session_state.sidebar_state["selected_page"] == "Analysis" and st.session_
         if st.sidebar.button(f"   └ {sub}"):
             st.session_state.sidebar_state["selected_analysis_subpage"] = sub
 
-# PREPROCESSING BUTTON
+# Preprocessing
 if st.sidebar.button("🛠 Preprocessing Suggestions"):
     st.session_state.sidebar_state["selected_page"] = "Preprocessing"
 
-# DOWNLOAD BUTTON
+# Download
 if st.sidebar.button("⬇ Download Preprocessed Data"):
     st.session_state.sidebar_state["selected_page"] = "Download"
 
@@ -218,9 +210,9 @@ elif selected_page == "Analysis":
 
 elif selected_page == "Preprocessing":
     if st.session_state.analysis_results and st.session_state.df is not None:
-        run_preprocessing_dashboard(st.session_state.analysis_results, st.session_state.df)
+        run_preprocessing_dashboard()  # uses session_state internally
     else:
         st.warning("⚠️ Please upload a dataset and run analysis first.")
 
 elif selected_page == "Download":
-    run_download_page()
+    run_download_page()  # should use st.session_state.pre_df internally

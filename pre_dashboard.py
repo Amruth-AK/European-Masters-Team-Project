@@ -24,8 +24,6 @@ from preprocessing_pipeline import fit_preprocessing_pipeline
 def apply_suggestion(df, suggestion, analysis_results=None):
     """
     Legacy helper used in a few places (and convenient for debugging).
-    For the real workflow we prefer fit_preprocessing_pipeline, but this
-    remains available and uses the central FUNC_MAP.
     """
     func_name = suggestion["function_to_call"]
     kwargs = suggestion.get("kwargs", {}).copy()
@@ -45,11 +43,23 @@ def apply_suggestion(df, suggestion, analysis_results=None):
     return df
 
 
-def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.DataFrame:
-    """Streamlit preprocessing dashboard with Apply/Ignore All buttons."""
+def run_preprocessing_dashboard() -> pd.DataFrame:
+    """
+    Streamlit preprocessing dashboard using session state.
+    Works with st.session_state.df and st.session_state.analysis_results.
+    """
     st.title("🛠 Preprocessing Suggestions")
 
-    # Initialize session state
+    # --- Read from session state ---
+    df = st.session_state.df
+    analysis_results = st.session_state.analysis_results
+    target_column = st.session_state.target_column
+
+    if df is None or analysis_results is None:
+        st.warning("⚠️ Please upload a dataset and run analysis first.")
+        return
+
+    # --- Initialize session state variables ---
     if "pre_df" not in st.session_state or st.session_state.pre_df is None:
         st.session_state.pre_df = df.copy()
     if "pre_status" not in st.session_state:
@@ -60,9 +70,8 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         st.session_state.fitted_pipeline = None
 
     current_df = st.session_state.pre_df
-    target_column = st.session_state.target_column
 
-    # Collect all suggestions
+    # --- Collect preprocessing suggestions ---
     steps = [
         ("Identifier Removal", suggest_identifier_removal(analysis_results)),
         ("Missing Values", suggest_missing_value_handling(analysis_results, target_column)),
@@ -80,50 +89,40 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
     if not valid_steps:
         st.success("No preprocessing suggestions found — your dataset looks clean!")
         st.dataframe(current_df.head())
-        # Even if no steps, mark as applied so modeling can proceed
         st.session_state.pre_status = "applied"
         st.session_state.transformation_pipeline = []
         st.session_state.fitted_pipeline = []
         return current_df
 
-    # Store selected suggestions
+    # --- Display suggestions ---
     selected_suggestions_list = []
 
-    # Show suggestions grouped by type
     for step_name, suggestions in valid_steps:
         with st.expander(f"🔹 {step_name}", expanded=True):
             for i, sug in enumerate(suggestions):
-                # Create a unique key for the checkbox
                 key = f"select_{step_name}_{i}"
-                
-                # Checkbox for selection (Default: Checked)
                 col_chk, col_det = st.columns([0.05, 0.95])
                 with col_chk:
                     is_selected = st.checkbox(
-                        "Select", 
-                        value=True, 
-                        key=key, 
+                        "Select",
+                        value=True,
+                        key=key,
                         label_visibility="collapsed"
                     )
-                
                 with col_det:
                     st.markdown(f"**{sug['suggestion']}**")
                     st.caption(f"Feature: `{sug['feature']}` | Issue: {sug['issue']}")
-
                 if is_selected:
                     selected_suggestions_list.append(sug)
 
             st.divider()
 
-    # Buttons
+    # --- Buttons to apply/ignore ---
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
-        
-        # Count selected
         n_selected = len(selected_suggestions_list)
-        
         apply_selected = col1.button(
-            f"Apply Selected Suggestions ({n_selected})", 
+            f"Apply Selected Suggestions ({n_selected})",
             key="apply_selected_btn",
             type="primary",
             disabled=n_selected == 0
@@ -131,14 +130,11 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
         ignore_all = col2.button("Ignore All Suggestions", key="ignore_all_btn")
 
         if apply_selected:
-            # Build pipeline from SELECTED suggestions
             pipeline_to_save = []
             for sug in selected_suggestions_list:
                 if sug.get("function_to_call") is not None:
-                    # Override replace_ratio if tuned
                     if sug["function_to_call"] == "apply_fastica" and "fastica_replace_ratio" in st.session_state:
                         sug["kwargs"]["replace_ratio"] = st.session_state.fastica_replace_ratio
-                        
                     pipeline_to_save.append(sug)
 
             st.session_state.transformation_pipeline = pipeline_to_save
@@ -161,6 +157,7 @@ def run_preprocessing_dashboard(analysis_results: dict, df: pd.DataFrame) -> pd.
             st.session_state.pre_status = "ignored"
             st.rerun()
 
+    # --- Status messages ---
     if st.session_state.pre_status == "applied":
         st.success("All preprocessing steps applied successfully!")
     elif st.session_state.pre_status == "ignored":
