@@ -21,27 +21,6 @@ from preprocessing_registry import FUNC_MAP
 from preprocessing_pipeline import fit_preprocessing_pipeline
 
 
-def apply_suggestion(df, suggestion, analysis_results=None):
-    """
-    Legacy helper used in a few places (and convenient for debugging).
-    """
-    func_name = suggestion["function_to_call"]
-    kwargs = suggestion.get("kwargs", {}).copy()
-    func = FUNC_MAP.get(func_name)
-
-    if func_name == "create_features_from_correlation_analysis" and analysis_results is not None:
-        kwargs.setdefault("analysis_results", analysis_results)
-
-    if func_name == "clip_outliers_iqr" and analysis_results is not None:
-        kwargs.setdefault("analysis_results", analysis_results)
-
-    if func:
-        try:
-            return func(df, **kwargs)
-        except Exception as e:
-            st.error(f"⚠️ Error applying {func_name} to {suggestion.get('feature', 'N/A')}: {e}")
-    return df
-
 
 def run_preprocessing_dashboard() -> pd.DataFrame:
     """
@@ -167,3 +146,4 @@ def run_preprocessing_dashboard() -> pd.DataFrame:
     st.dataframe(st.session_state.pre_df.head())
 
     return st.session_state.pre_df
+
