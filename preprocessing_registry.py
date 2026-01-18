@@ -30,7 +30,6 @@ from preprocessing_function import (
     combine_categorical_features,
     apply_fastica,
     tune_fastica_replace_ratio,
-    grid_search_replace_ratio,
     decide_correlation_threshold,
     assess_ica_necessity,
     winsorize_column,       
@@ -70,7 +69,6 @@ FUNC_MAP = {
     "combine_categorical_features": combine_categorical_features,
     "apply_fastica": apply_fastica,
     "tune_fastica_replace_ratio": tune_fastica_replace_ratio,
-    "grid_search_replace_ratio": grid_search_replace_ratio,
     "decide_correlation_threshold": decide_correlation_threshold,
     "assess_ica_necessity": assess_ica_necessity,
 }

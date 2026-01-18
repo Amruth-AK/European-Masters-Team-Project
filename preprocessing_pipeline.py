@@ -10,8 +10,8 @@ from sklearn.decomposition import FastICA
 from sklearn.preprocessing import StandardScaler
 
 from preprocessing_function import (
-    _calculate_intelligent_replace_ratio,
-    _select_features_to_replace
+    _select_features_to_replace,
+    tune_fastica_replace_ratio
 )
 
 from preprocessing_registry import FUNC_MAP
@@ -541,6 +541,43 @@ def _transform_corr_features_step(df: pd.DataFrame, step: FittedStep):
 #   FASTICA (fit / transform) - simplified, stateful version
 # =====================================================================
 
+def _infer_problem_type(df: pd.DataFrame, target_column: str) -> str:
+    """
+    Infer problem type (regression/classification) from target column.
+    
+    Returns:
+        'regression' if target is numeric with many unique values
+        'binary' if target has 2 unique values
+        'multiclass' if target has 3-10 unique values
+        'regression' as default fallback
+    """
+    if target_column not in df.columns:
+        return "regression"  # Default fallback
+    
+    target_series = df[target_column].dropna()
+    if len(target_series) == 0:
+        return "regression"
+    
+    unique_count = target_series.nunique()
+    
+    # If numeric with many unique values, likely regression
+    if pd.api.types.is_numeric_dtype(target_series):
+        if unique_count > 10:
+            return "regression"
+        elif unique_count == 2:
+            return "binary"
+        elif 3 <= unique_count <= 10:
+            return "multiclass"
+    
+    # For non-numeric or low cardinality, treat as classification
+    if unique_count == 2:
+        return "binary"
+    elif 3 <= unique_count <= 10:
+        return "multiclass"
+    
+    return "regression"  # Default fallback
+
+
 def _fit_fastica_step(
     df: pd.DataFrame,
     kwargs: Dict[str, Any],
@@ -552,6 +589,9 @@ def _fit_fastica_step(
     so we can apply the *same* transform on test data.
 
     This is a simplified but fully stateful variant of apply_fastica.
+    
+    Auto-tuning: If replace_ratio is None and target_column is available,
+    automatically calls tune_fastica_replace_ratio() to find optimal value.
     """
     df_proc = df.copy()
 
@@ -561,6 +601,10 @@ def _fit_fastica_step(
     max_iter = kwargs.get("max_iter", 1000)
     whiten = kwargs.get("whiten", "unit-variance")
     n_components = kwargs.get("n_components", None)
+    mode = kwargs.get("mode", "hybrid")
+    replace_ratio = kwargs.get("replace_ratio")
+    auto_tune = kwargs.get("auto_tune", True)  # New parameter: enable auto-tuning
+    n_trials = kwargs.get("n_trials", 15)  # Number of Optuna trials for auto-tuning
 
     # 1) Select numeric columns
     numerical_cols = [
@@ -626,9 +670,6 @@ def _fit_fastica_step(
         df_proc[cname] = S[:, i]
 
     # 5) Handle mode (hybrid/replace/add)
-    mode = kwargs.get("mode", "hybrid")
-    replace_ratio = kwargs.get("replace_ratio")
-    
     cols_to_drop = []
     
     if mode == 'replace':
@@ -636,14 +677,54 @@ def _fit_fastica_step(
         print(f"[_fit_fastica_step] Mode 'replace': Dropping {len(cols_to_drop)} original features.")
         
     elif mode == 'hybrid':
-        # Calculate ratio if not provided
+        # Auto-tuning: If replace_ratio is None, try to auto-tune
         if replace_ratio is None:
-            replace_ratio = _calculate_intelligent_replace_ratio(
-                df_proc,
-                numerical_cols,
-                n_components,
-                analysis_results=analysis_results
-            )
+            if auto_tune and target_column and target_column in df_proc.columns:
+                try:
+                    # Infer problem type from target column
+                    problem_type = kwargs.get("problem_type")
+                    if not problem_type:
+                        problem_type = _infer_problem_type(df_proc, target_column)
+                        print(f"🔍 [Auto-Tune] Inferred problem_type: {problem_type}")
+                    
+                    print(f"🚀 [Auto-Tune] Starting Optuna tuning for replace_ratio (n_trials={n_trials})...")
+                    print(f"   This may take a few minutes. Set auto_tune=False to skip.")
+                    
+                    # Prepare fastica_kwargs (exclude tuning-specific params)
+                    fastica_kwargs = {
+                        k: v for k, v in kwargs.items()
+                        if k not in ['target_column', 'problem_type', 'auto_tune', 'n_trials', 'replace_ratio']
+                    }
+                    
+                    # Call Optuna tuning
+                    tuning_result = tune_fastica_replace_ratio(
+                        df=df_proc,
+                        target_column=target_column,
+                        problem_type=problem_type,
+                        n_trials=n_trials,
+                        **fastica_kwargs
+                    )
+                    
+                    replace_ratio = tuning_result['best_replace_ratio']
+                    best_score = tuning_result['best_score']
+                    
+                    print(f"✅ [Auto-Tune] Optimal replace_ratio: {replace_ratio:.3f} (score: {best_score:.4f})")
+                    
+                except Exception as e:
+                    print(f"⚠️ [Auto-Tune] Failed: {e}")
+                    print(f"   Falling back to default replace_ratio=0.4")
+                    replace_ratio = 0.4
+            else:
+                # No auto-tuning: use default
+                if not target_column:
+                    print("⚠️ [Optuna Version] replace_ratio not provided and target_column missing.")
+                    print("   Cannot auto-tune. Using default 0.4.")
+                elif not auto_tune:
+                    print("⚠️ [Optuna Version] replace_ratio not provided and auto_tune=False.")
+                    print("   Using default 0.4. Set auto_tune=True to enable automatic tuning.")
+                else:
+                    print("⚠️ [Optuna Version] replace_ratio not provided. Using default 0.4.")
+                replace_ratio = 0.4
             
         # Identify features to replace
         n_to_replace = int(len(numerical_cols) * replace_ratio)
@@ -654,7 +735,29 @@ def _fit_fastica_step(
             analysis_results
         )
         cols_to_drop = cols_to_replace
+        
+        # Enhanced debug output: Count feature types
+        original_count = 0
+        second_order_count = 0
+        third_order_count = 0
+        
+        for col in cols_to_drop:
+            if any(op in col for op in ['_x_', '_div_', '_minus_', '_plus_', '_interact_']):
+                # Check if it's 3rd order (contains 2nd order feature name pattern)
+                # Count occurrences of operation patterns to determine order
+                op_count = sum(col.count(op) for op in ['_x_', '_div_', '_minus_', '_plus_'])
+                if op_count >= 2:
+                    third_order_count += 1
+                else:
+                    second_order_count += 1
+            else:
+                original_count += 1
+        
         print(f"[_fit_fastica_step] Mode 'hybrid': Dropping {len(cols_to_drop)} features (ratio={replace_ratio:.2f}).")
+        print(f"  -> Feature type breakdown:")
+        print(f"     Original features: {original_count}")
+        print(f"     2nd-order features: {second_order_count}")
+        print(f"     3rd-order features: {third_order_count}")
         
     # Apply drops
     if cols_to_drop:
@@ -676,51 +779,64 @@ def _fit_fastica_step(
 
 def _transform_fastica_step(df: pd.DataFrame, step: FittedStep):
     """
-    Test-time: reuse the stored scaler + ICA model to create the same ICA
-    components on new data.
+    Transform-time: Apply the same FastICA transformation learned during fit.
+    Uses the saved scaler and ICA model to transform test data consistently.
     """
     df_proc = df.copy()
-    params = step.params or {}
-
-    numeric_cols = params.get("numeric_cols") or []
+    
+    # Get saved parameters from fit-time
+    params = step.params
+    numerical_cols = params.get("numeric_cols", [])
     scaler = params.get("scaler")
     ica = params.get("ica")
-    component_names = params.get("component_names") or []
-
-    if not numeric_cols or scaler is None or ica is None:
-        # Nothing to do
+    component_names = params.get("component_names", [])
+    cols_to_drop = params.get("cols_to_drop", [])
+    
+    # Check if FastICA was successfully fitted
+    if ica is None or scaler is None or not numerical_cols:
+        print("[_transform_fastica_step] FastICA was not fitted, skipping transformation.")
         return df_proc
-
-    # Ensure all required columns are present
-    missing = [c for c in numeric_cols if c not in df_proc.columns]
-    if missing:
-        print(f"[apply_fitted_pipeline] FastICA: missing columns {missing}, skipping transform.")
+    
+    # Check if required columns exist in test data
+    missing_cols = [col for col in numerical_cols if col not in df_proc.columns]
+    if missing_cols:
+        print(f"⚠️ [_transform_fastica_step] Missing columns in test data: {missing_cols[:5]}...")
+        # Use only available columns
+        numerical_cols = [col for col in numerical_cols if col in df_proc.columns]
+    
+    if not numerical_cols:
+        print("[_transform_fastica_step] No matching numeric columns found, skipping.")
         return df_proc
-
-    X = df_proc[numeric_cols].copy()
+    
+    # Prepare data: use same columns as training
+    X = df_proc[numerical_cols].copy()
+    
+    # Fill missing values with median (same as fit-time)
     if X.isnull().any().any():
+        # Use training median if available, otherwise compute from test data
         X = X.fillna(X.median())
-
+    
+    # Apply saved scaler transformation
+    X_scaled = scaler.transform(X)
+    
+    # Apply saved ICA transformation
     try:
-        X_scaled = scaler.transform(X)
         S = ica.transform(X_scaled)
     except Exception as e:
         print(f"❌ FastICA transform failed: {e}")
         return df_proc
-
+    
+    # Add ICA components as new columns
     for i, cname in enumerate(component_names):
-        df_proc[cname] = S[:, i]
-
-    # Drop columns if specified (for hybrid/replace mode)
-    cols_to_drop = params.get("cols_to_drop", [])
-    if cols_to_drop:
-        # Only drop columns that exist
-        existing_drops = [c for c in cols_to_drop if c in df_proc.columns]
-        if existing_drops:
-            df_proc = df_proc.drop(columns=existing_drops)
-
+        if i < S.shape[1]:
+            df_proc[cname] = S[:, i]
+    
+    # Drop the same columns that were dropped during fit
+    cols_to_drop_available = [col for col in cols_to_drop if col in df_proc.columns]
+    if cols_to_drop_available:
+        df_proc = df_proc.drop(columns=cols_to_drop_available)
+    
     return df_proc
-
 
 # =====================================================================
 #   INDICATORS (fit / transform)

@@ -1,3 +1,55 @@
+"""
+Module Index:
+====================================================================
+Module 1: Missing Values (Lines 99-249)
+  - delete_missing_rows(), delete_missing_columns()
+  - impute_mean(), impute_median(), impute_mode(), impute_constant()
+  - add_missing_indicator()
+
+Module 2: Duplicate Values (Lines 251-276)
+  - delete_duplicates()
+
+Module 3: Numerical Scaling (Lines 280-374)
+  - standard_scaler(), minmax_scaler()
+
+Module 4: Outlier Handling (Lines 377-605)
+  - clip_outliers_iqr(), winsorize_column(), apply_power_transform()
+  - robust_scaler(), remove_outliers_iqr()
+
+Module 5: Categorical Encoding (Lines 608-790)
+  - one_hot_encode(), label_encode(), ordinal_encode()
+  - binary_encode(), frequency_encode()
+
+Module 6: Identifier Removal (Lines 792-807)
+  - remove_identifier_columns()
+
+Module 7: Datetime Features (Lines 810-981)
+  - extract_datetime_features(), calculate_datetime_diff()
+
+Module 8: Correlation Features (Lines 983-1462)
+  - create_features_from_correlation_analysis() [Main]
+  - _find_high_corr_pairs(), _generate_candidate_features()
+  - _apply_basic_filter(), _apply_correlation_filter()
+  - _generate_third_order_features()
+
+Module 9: Categorical Combination (Lines 1467-1507)
+  - combine_categorical_features()
+
+Module 10: FastICA Dimensionality Reduction (Lines 1512-1837)
+  - apply_fastica() [Main - Optuna version]
+  - _select_features_to_replace(), _create_ica_interactions()
+
+Module 11: FastICA Optuna Tuning ⭐ Core Feature (Lines 1839-2011)
+  - _evaluate_fastica_performance(), tune_fastica_replace_ratio() ⭐
+
+Module 12: Helper Decision Functions (Lines 2015-2106)
+  - decide_correlation_threshold(), assess_ica_necessity()
+
+====================================================================
+Total Functions: 37 
+====================================================================
+"""
+
 import pandas as pd
 import numpy as np
 from typing import Union, List, Dict, Optional, Any
@@ -16,10 +68,10 @@ from sklearn.preprocessing import PowerTransformer
 
 
 # ===================================================================
-# Missing values - Tecla
+# Module 1: Missing Values - Tecla
 # ===================================================================
 
-#================DELETION=============================
+# Deletion Functions
 
 def delete_missing_rows(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame:
     """
@@ -71,7 +123,7 @@ def delete_missing_columns(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataF
 
 
 
-#==================IMPUTATION=============
+# Imputation Functions
 def impute_mean(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFrame:
     """
     Impute missing values in numeric column(s) using the mean.
@@ -168,7 +220,7 @@ def add_missing_indicator(df: pd.DataFrame, columns: Union[str, List[str]]) -> p
     return df
 
 # ===================================================================
-# Duplicate Values - Tecla
+# Module 2: Duplicate Values - Tecla
 # ===================================================================
 
 def delete_duplicates(df: pd.DataFrame, subset: Union[str, List[str], None] = None) -> pd.DataFrame:
@@ -197,7 +249,7 @@ def delete_duplicates(df: pd.DataFrame, subset: Union[str, List[str], None] = No
 
 
 # ============================================================================
-# Numerical Features - Zhiqi
+# Module 3: Numerical Features Scaling - Zhiqi
 # ============================================================================
 
 def standard_scaler(df: pd.DataFrame, column: Union[str, List[str]]) -> pd.DataFrame:
@@ -294,7 +346,7 @@ def minmax_scaler(df: pd.DataFrame, column: Union[str, List[str]],
 
 
 # ============================================================================
-# Outlier Handling - Zhiqi
+# Module 4: Outlier Handling - Zhiqi
 # ============================================================================
 
 def clip_outliers_iqr(df: pd.DataFrame, column: str, 
@@ -525,7 +577,7 @@ def remove_outliers_iqr(df: pd.DataFrame, column: str,
 
 
 # ============================================================================
-# Categorical Encoding - Amruth
+# Module 5: Categorical Encoding - Amruth
 # ============================================================================
 
 def one_hot_encode(df: pd.DataFrame, columns: Union[str, List[str]], drop_first: bool = False) -> pd.DataFrame:
@@ -709,7 +761,7 @@ def frequency_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.Dat
     return df
 
 # ============================================================================
-# Identifier Column Removal - Zhiqi
+# Module 6: Identifier Column Removal - Zhiqi
 # ============================================================================
 
 def remove_identifier_columns(df, id_columns=None, **kwargs):
@@ -727,7 +779,7 @@ def remove_identifier_columns(df, id_columns=None, **kwargs):
 
 
 # ============================================================================
-# Datetime Feature Engineering - Zhiqi
+# Module 7: Datetime Feature Engineering - Zhiqi
 # ============================================================================
 
 def extract_datetime_features(df: pd.DataFrame, 
@@ -899,7 +951,7 @@ def calculate_datetime_diff(df: pd.DataFrame,
     
     return df
 
-def create_features_from_high_correlation(
+def create_features_from_correlation_analysis(
     df: pd.DataFrame, 
     correlation_threshold: float = 0.3,
     target_column: Optional[str] = None,
@@ -911,7 +963,7 @@ def create_features_from_high_correlation(
     use_correlation_filter: bool = True,
     min_cardinality: int = 3,
     max_new_features: int = 500,
-    corr_filter_threshold: float = 0.95,
+    corr_filter_threshold: float = 0.9,
     min_variance: float = 1e-6,
     **kwargs
 ) -> pd.DataFrame:
@@ -1079,7 +1131,14 @@ def create_features_from_high_correlation(
     return df
 
 
-# Helper functions
+# ============================================================================
+# Module 8: Correlation-based Feature Generation
+# ============================================================================
+# Main: create_features_from_correlation_analysis()
+# Helpers: _find_high_corr_pairs(), _generate_candidate_features()
+#          _apply_basic_filter(), _apply_correlation_filter()
+#          _generate_third_order_features()
+# ============================================================================
 def _find_high_corr_pairs(corr_matrix: pd.DataFrame, numerical_cols: List[str], target_column: Optional[str], threshold: float) -> List[tuple]:
     """
     Identify pairs of features with correlation above the threshold.
@@ -1199,7 +1258,7 @@ def _apply_basic_filter(df: pd.DataFrame, min_cardinality: int, min_variance: fl
     return df_filtered
 
 
-def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.95) -> pd.DataFrame:
+def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.9) -> pd.DataFrame:
     """
     Remove redundant features with high correlation using a greedy strategy.
     
@@ -1209,7 +1268,7 @@ def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.95) -> pd.D
     
     Args:
         df: Input DataFrame.
-        threshold: Correlation threshold (default 0.95).
+        threshold: Correlation threshold (default 0.9).
         
     Returns:
         pd.DataFrame: DataFrame with redundant features removed.
@@ -1263,9 +1322,6 @@ def _apply_correlation_filter(df: pd.DataFrame, threshold: float = 0.95) -> pd.D
     return df_filtered
 
 
-from typing import List, Optional
-import pandas as pd
-import numpy as np
 
 def _generate_third_order_features(
     df: pd.DataFrame,
@@ -1372,19 +1428,12 @@ def _generate_third_order_features(
     return result
 
 
-def create_features_from_correlation_analysis(
-    df: pd.DataFrame,
-    analysis_results: Dict = None,
-    **kwargs
-) -> pd.DataFrame:
-    """Wrapper function using pre-computed analysis results."""
-    return create_features_from_high_correlation(
-        df=df, 
-        analysis_results=analysis_results, 
-        **kwargs
-    )
+
     
-   
+# ============================================================================
+# Module 9: Categorical Feature Combination
+# ============================================================================
+
 def combine_categorical_features(df: pd.DataFrame,
                                  columns_to_combine: List[str],
                                  new_col_name: str,
@@ -1426,6 +1475,14 @@ def combine_categorical_features(df: pd.DataFrame,
 
 
 
+# ============================================================================
+# Module 10: FastICA Dimensionality Reduction - Optuna Version
+# ============================================================================
+# Main: apply_fastica()
+# Helpers: _select_features_to_replace(), _create_ica_interactions()
+# Note: Requires manual replace_ratio or call tune_fastica_replace_ratio() first
+# ============================================================================
+
 def apply_fastica(
     df: pd.DataFrame,
     n_components: int = None,
@@ -1435,14 +1492,19 @@ def apply_fastica(
     max_iter: int = 1000,
     whiten: str = 'unit-variance',
     mode: str = 'hybrid',   # 'hybrid' is the default mode
-    replace_ratio: float = None,  # Automatically calculate the replace ratio
+    replace_ratio: float = None,  # Optuna version: must provide or tune first
     replace_columns: List[str] = None,
     keep_columns: List[str] = None,
     add_interaction_features: bool = True,  # Add ICA interaction features
     analysis_results: dict = None  # Use analysis results to make intelligent decisions
 ) -> pd.DataFrame:
     """
-    Apply FastICA with intelligent hybrid mode.
+    Apply FastICA with Optuna-based hyperparameter tuning (OPTUNA VERSION).
+    
+    This version requires replace_ratio to be provided or tuned via
+    tune_fastica_replace_ratio() for optimal performance.
+    
+    For heuristic-based automatic calculation, see preprocessing_function_heuristic.py
 
     Args:
         df: Input dataframe
@@ -1531,13 +1593,13 @@ def apply_fastica(
     # Placeholder for final result
     df_result = df.copy()
 
-    # 6. Handle different modes
+    # Handle different modes
     if mode == 'hybrid':
-        # Intelligent calculation of replace ratio
         if replace_ratio is None:
-            replace_ratio = _calculate_intelligent_replace_ratio(
-                df, numerical_cols, n_components, analysis_results
-            )
+            # Optuna version: replace_ratio must be provided or tuned separately
+            print("⚠️ [Optuna Version] replace_ratio not provided. Using default 0.4.")
+            print("   For optimal results, use tune_fastica_replace_ratio() first.")
+            replace_ratio = 0.4
 
         # How many features to replace
         n_to_replace = max(1, int(len(numerical_cols) * replace_ratio))
@@ -1559,8 +1621,8 @@ def apply_fastica(
 
         df_result = pd.concat(result_parts, axis=1)
 
-        print(f"✅ FastICA (Intelligent Hybrid Mode):")
-        print(f"   Replace ratio: {replace_ratio:.2%} (auto-calculated)")
+        print(f"✅ FastICA (Optuna-Tuned Hybrid Mode):")
+        print(f"   Replace ratio: {replace_ratio:.2%} (from Optuna tuning)")
         print(f"   Replaced {len(cols_to_replace)} features, kept {len(cols_to_keep)}, "
               f"added {n_components} ICA components")
         print(f"   Total features: {len(df.columns)} → {len(df_result.columns)}")
@@ -1626,81 +1688,7 @@ def apply_fastica(
 
     return df_result
 
-def _calculate_intelligent_replace_ratio(
-    df: pd.DataFrame,
-    numerical_cols: List[str],
-    n_components: int,
-    analysis_results: dict = None,
-    min_ratio: float = 0.1,
-    max_ratio: float = 0.7,
-) -> float:
-    """
-    Calculates replacement ratio based on feature redundancy metrics.
-    
-    Optimized for stability:
-    1. Handles mismatch between current columns and cached analysis results.
-    2. Uses both average correlation and high-correlation density.
-    """
-    # 1. Base Ratio: Proportional to dimensionality reduction needs
-    n_features = max(1, len(numerical_cols))
-    base_ratio = n_components / n_features + 0.1
-    
-    # If no analysis results, return safe base ratio immediately
-    if not analysis_results:
-        return float(max(min_ratio, min(max_ratio, base_ratio)))
-
-    try:
-        # 2. Extract Correlation Matrix Safely
-        corr_data = analysis_results.get("correlations", {}).get("correlation_matrix")
-        if not corr_data:
-            return float(max(min_ratio, min(max_ratio, base_ratio)))
-
-        # 3. Robust Indexing (Key Stability Fix)
-        # analysis_results might be old (pre-feature-generation), so we must find the intersection
-        # of columns to avoid KeyError during .loc
-        cached_cols = pd.DataFrame(corr_data).columns
-        valid_cols = list(set(numerical_cols).intersection(cached_cols))
-        
-        if len(valid_cols) < 2:
-            # Not enough overlapping columns to judge redundancy
-            return float(max(min_ratio, min(max_ratio, base_ratio)))
-
-        corr_df = pd.DataFrame(corr_data).loc[valid_cols, valid_cols]
-
-        # 4. Calculate Statistics (Vectorized)
-        # Extract off-diagonal elements
-        mask = ~np.eye(len(corr_df), dtype=bool)
-        values = corr_df.abs().values[mask]
-        
-        if len(values) == 0:
-            return float(max(min_ratio, min(max_ratio, base_ratio)))
-
-        avg_corr = values.mean()
-        # Density of very high correlations (> 0.7)
-        # This catches cases where avg is low, but specific clusters are redundant
-        high_corr_density = (values > 0.7).mean()
-
-        # 5. Dynamic Adjustment Strategy
-        if avg_corr < 0.2:
-            base_ratio -= 0.15  # Mostly independent -> keep original
-        elif avg_corr < 0.3:
-            base_ratio -= 0.08
-        elif avg_corr >= 0.6:
-            # If extremely redundant OR high density of strong pairs -> replace aggressively
-            if high_corr_density > 0.3:
-                base_ratio += 0.15
-            else:
-                base_ratio += 0.08
-        elif avg_corr >= 0.5:
-             base_ratio += 0.05
-
-    except Exception as e:
-        # Fail safe: log if needed, but return base ratio to keep pipeline alive
-        # print(f"Warning in replace ratio calc: {e}")
-        pass
-    # 6. Final Clamp
-    return float(max(min_ratio, min(max_ratio, base_ratio)))
-
+# Module 10 Helper: FastICA Feature Selection
 
 def _select_features_to_replace(
     df: pd.DataFrame,
@@ -1714,49 +1702,52 @@ def _select_features_to_replace(
     Optimized for:
     1. Speed: Uses vectorized operations for variance fallback.
     2. Stability: Guarantees at least 1 feature is kept.
+    3. Handles features without correlation info (e.g., 2nd/3rd order) using variance.
     """
-    # 1. Boundary Check
+    # Boundary check
     total_feats = len(numerical_cols)
     n_to_replace = max(0, min(total_feats, n_to_replace))
-    
     if n_to_replace == 0:
         return [], numerical_cols
 
-    # 2. Initialize Scores
+    # Initialize scores
     scores = {col: 0.0 for col in numerical_cols}
     used_target_corr = False
 
-    # 3. Strategy A: Target Correlation (Priority)
+    # Strategy A: Target Correlation (Priority)
     if analysis_results:
         target_corr = analysis_results.get("correlations", {}).get("target_correlation", {})
         
-        # FIX: Ensure it is a dictionary before trying to access keys
         if isinstance(target_corr, dict) and target_corr:
             for col in numerical_cols:
                 val = target_corr.get(col)
                 if isinstance(val, (int, float)) and not pd.isna(val):
                     scores[col] = abs(val)
             
-            # Check if we actually got any non-zero signal
             if any(s > 0 for s in scores.values()):
                 used_target_corr = True
-    # 4. Strategy B: Variance (Fallback) - Vectorized
-    # Only run if Target Correlation failed or provided no signal
+    
+    # Calculate variances for fallback
+    try:
+        variances = df[numerical_cols].var().fillna(0)
+        variances_dict = variances.to_dict()
+    except Exception:
+        variances_dict = {col: 1e-10 for col in numerical_cols}
+    
+    # Strategy B: Variance (Fallback)
     if not used_target_corr:
-        try:
-            # Vectorized calculation is faster than loop
-            variances = df[numerical_cols].var().fillna(0)
-            scores = variances.to_dict()
-        except Exception:
-            # Absolute fallback if something goes wrong
-            pass
+        scores = variances_dict
+    else:
+        # Use variance for features without correlation info
+        for col in numerical_cols:
+            if scores.get(col, 0.0) == 0.0:
+                var_score = variances_dict.get(col, 0.0)
+                scores[col] = var_score if var_score > 0 else 1e-10
 
-    # 5. Sort: Lowest Score -> Replace First
-    # Primary sort key: Score (ascending). Secondary key: Name (for deterministic tie-breaking)
+    # Sort: Lowest score -> Replace first
     ordered_cols = sorted(numerical_cols, key=lambda c: (scores.get(c, 0.0), c))
 
-    # 6. Slicing with Safety Net
-    # If algorithm wants to replace ALL features, forcefully keep the best one
+    # Safety: Keep at least one feature
     if n_to_replace == total_feats:
         n_to_replace -= 1
 
@@ -1766,6 +1757,8 @@ def _select_features_to_replace(
     return cols_to_replace, cols_to_keep
 
 
+# Module 10 Helper: ICA Interaction Features
+
 def _create_ica_interactions(ica_df: pd.DataFrame, n_interactions: int = 5) -> pd.DataFrame:
     """
     Creates pairwise interactions of ICA components.
@@ -1774,24 +1767,26 @@ def _create_ica_interactions(ica_df: pd.DataFrame, n_interactions: int = 5) -> p
     1. Readability: Uses itertools to replace nested loops.
     2. Performance: Builds dict first to avoid DataFrame fragmentation.
     """
-    # 1. Boundary Checks
+    # Boundary checks
     if ica_df.empty or n_interactions <= 0 or len(ica_df.columns) < 2:
         return pd.DataFrame(index=ica_df.index)
 
     interactions = {}
-    
-    # 2. Generate Combinations (Safe & Pythonic)
-    # combinations('ABCD', 2) --> AB AC AD BC BD CD
     for col1, col2 in itertools.combinations(ica_df.columns, 2):
-        
-        # Stop if quota reached
         if len(interactions) >= n_interactions:
             break
-            
-        # Create Interaction
         interactions[f'{col1}_x_{col2}'] = ica_df[col1] * ica_df[col2]
 
     return pd.DataFrame(interactions, index=ica_df.index)
+
+# ============================================================================
+# Module 11: FastICA Optuna Hyperparameter Tuning 
+# ============================================================================
+# Core functionality: Find optimal replace_ratio via cross-validation
+# Main: tune_fastica_replace_ratio() ⭐
+# Helper: _evaluate_fastica_performance()
+# Usage: 1) Call tune_fastica_replace_ratio() 2) Get optimal ratio 3) Use in apply_fastica()
+# ============================================================================
 
 def _evaluate_fastica_performance(
     replace_ratio: float,
@@ -1807,8 +1802,8 @@ def _evaluate_fastica_performance(
     fastica_args: dict
 ) -> Dict[str, Any]:
     """
-    Common evaluation logic shared by Grid Search and Optuna.
-    Executes the entire FastICA + CV pipeline for a single replace_ratio.
+    Evaluate FastICA performance for a single replace_ratio using cross-validation.
+    Internal use only for Optuna tuning.
     """
     try:
         # A. Transform Data
@@ -1856,130 +1851,79 @@ def _evaluate_fastica_performance(
     except Exception as e:
         return {"score": float('inf'), "error": str(e)}
 
-def grid_search_replace_ratio(
-    df: pd.DataFrame,
-    target_column: str,
-    model,
-    problem_type: str,
-    replace_ratios: List[float] = None,
-    n_components: int = None,
-    exclude_columns: List[str] = None,
-    analysis_results: dict = None,
-    cv_folds: int = 5,
-    random_state: int = 42,
-    **fastica_kwargs
-) -> pd.DataFrame:
-    """
-    Grid search wrapper reusing the unified evaluation engine.
-    Significantly shorter and cleaner.
-    """
-    # Local import to avoid circular dependency    
-    # 1. Setup
-    if replace_ratios is None: replace_ratios = [0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5, 0.6, 0.7]
-    df_work = df.copy()
-    if target_column not in df_work.columns: raise ValueError(f"Target column '{target_column}' not found")
-    
-    pt = problem_type.lower()
-    is_reg = pt == "regression"
-    eval_metric = "rmse" if is_reg else "roc_auc" if pt == "binary" else "log_loss"
-    
-    # CV Setup
-    cv_cls = KFold if is_reg else StratifiedKFold
-    cv = cv_cls(n_splits=cv_folds, shuffle=True, random_state=random_state)
-    
-    # Identify original numerical columns (for counting stats)
-    original_numerical = df_work.select_dtypes(include=np.number).columns.tolist()
-    if target_column in original_numerical: original_numerical.remove(target_column)
-    
-    fastica_args = {
-        "n_components": n_components,
-        "exclude_columns": exclude_columns,
-        "mode": 'hybrid',
-        "analysis_results": analysis_results,
-        "random_state": random_state,
-        **fastica_kwargs
-    }
-    
-    # 2. Loop
-    results = []
-    print(f"🔎 Starting Grid Search for Replace Ratio ({len(replace_ratios)} values)...")
-    
-    for ratio in replace_ratios:
-        # Call the engine!
-        res = _evaluate_fastica_performance(
-            ratio, df_work, target_column, original_numerical, 
-            model, cv, is_reg, eval_metric, pt, apply_fastica, fastica_args
-        )
-        
-        status = "error" if res["error"] else "success"
-        mean_score = res.get("score", np.nan)
-        
-        print(f"  Ratio {ratio:.2f}: Score={mean_score:.4f} ({status})")
-        
-        results.append({
-            "replace_ratio": ratio,
-            "mean_score": mean_score,
-            "std_score": res.get("std", np.nan),
-            "n_features_after": res.get("n_features_after", np.nan),
-            "status": status,
-            "error_message": res.get("error")
-        })
-        
-    return pd.DataFrame(results).sort_values("mean_score")
+
 
 
 def tune_fastica_replace_ratio(
     df: pd.DataFrame,
     target_column: str,
-    model,
     problem_type: str,
+    model=None,
     n_trials: int = 20,
     **fastica_kwargs
 ) -> dict:
     """
-    Optuna Tuning Wrapper reusing the unified evaluation engine.
+    ⭐ Core Feature: Tune FastICA replace_ratio using Optuna.
     
-    Optimized for:
-    1. DRY Principle: Reuses _evaluate_fastica_performance.
-    2. Observability: Records metadata (feature counts) into Optuna trials.
+    Finds optimal replace_ratio via cross-validation. Core functionality of Optuna version.
+    
+    Optimized for: DRY principle, observability (records metadata in trials).
+    
+    Example:
+        >>> result = tune_fastica_replace_ratio(df, 'target', 'regression', n_trials=20)
+        >>> optimal_ratio = result['best_replace_ratio']
+        >>> df_transformed = apply_fastica(df, replace_ratio=optimal_ratio, ...)
     """
-    # Local import    
-    # 1. Standard Setup
+    # Setup
     df_work = df.copy()
     pt = problem_type.lower()
     is_reg = pt == "regression"
     eval_metric = "rmse" if is_reg else "roc_auc" if pt == "binary" else "log_loss"
     
+    # CatBoost setup
+    if model is None:
+        try:
+            from catboost import CatBoostClassifier, CatBoostRegressor
+            print("🚀 Using CatBoost as the proxy evaluator for FastICA tuning.")
+            
+            common_params = {
+                "iterations": 100,
+                "depth": 4,
+                "learning_rate": 0.1,
+                "verbose": 0,
+                "allow_writing_files": False,
+                "thread_count": 1
+            }
+            
+            if is_reg:
+                model = CatBoostRegressor(loss_function='RMSE', **common_params)
+            else:
+                model = CatBoostClassifier(eval_metric='AUC' if eval_metric == 'roc_auc' else 'Logloss', **common_params)
+                
+        except ImportError:
+            raise ImportError("❌ CatBoost is required for FastICA auto-tuning but not installed. Please run `pip install catboost`.")
+
     cv_cls = KFold if is_reg else StratifiedKFold
     cv = cv_cls(n_splits=5, shuffle=True, random_state=42)
     
     original_numerical = df_work.select_dtypes(include=np.number).columns.tolist()
     if target_column in original_numerical: original_numerical.remove(target_column)
 
-    # 2. Define Objective
+    # Define objective
     def objective(trial: optuna.Trial) -> float:
-        # Suggest parameter
         replace_ratio = trial.suggest_float("replace_ratio", 0.1, 0.7, step=0.05)
-        
-        # Call Unified Engine
         res = _evaluate_fastica_performance(
             replace_ratio, df_work, target_column, original_numerical, 
             model, cv, is_reg, eval_metric, pt, apply_fastica, fastica_kwargs
         )
-        
-        # Error Handling
         if res["error"]: 
             return float('inf')
-            
-        # [CRITICAL ADDITION] Record Metadata for Analysis
-        # This restores the functionality of the "Long Version" while keeping code short
         trial.set_user_attr("n_features_after", res["n_features_after"])
         trial.set_user_attr("n_replaced", res["n_replaced"])
         trial.set_user_attr("std_score", res["std"])
-        
         return res["score"]
 
-    # 3. Run Optimization
+    # Run optimization
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=n_trials)
     
@@ -1990,6 +1934,12 @@ def tune_fastica_replace_ratio(
     }
 
 
+
+# ============================================================================
+# Module 12: Helper Decision Functions
+# ============================================================================
+# Decision helpers that don't directly modify DataFrames
+# ============================================================================
 
 def decide_correlation_threshold(all_corrs, method='auto', **kwargs):
     """
