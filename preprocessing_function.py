@@ -12,6 +12,9 @@ from sklearn.decomposition import FastICA
 import itertools
 from sklearn.preprocessing import PowerTransformer
 
+# ============================================================================
+# Missing Values
+# ============================================================================
 
 def delete_missing_rows(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame:
     """
@@ -108,9 +111,9 @@ def add_missing_indicator(df: pd.DataFrame, columns: Union[str, List[str]]) -> p
         
     return df
 
-# ===================================================================
-# Duplicate Values - Tecla
-# ===================================================================
+# ===========================================================================
+# Duplicate Values
+# ===========================================================================
 
 def delete_duplicates(df: pd.DataFrame, subset: Union[str, List[str], None] = None) -> pd.DataFrame:
     """

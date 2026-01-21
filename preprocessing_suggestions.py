@@ -3,6 +3,10 @@ import pandas as pd
 import itertools
 from preprocessing_registry import FUNC_MAP, decide_correlation_threshold, assess_ica_necessity
 
+# ===================================================================
+# Missing Values
+# ===================================================================
+
 def suggest_missing_value_handling(analysis_results: dict, target_column: str = None) -> list:
     """
     Robust, model-agnostic missing value suggestions.
@@ -77,6 +81,10 @@ def suggest_missing_value_handling(analysis_results: dict, target_column: str = 
 
     return suggestions
 
+# ===================================================================
+# Duplicate Values
+# ===================================================================
+
 def suggest_duplicate_handling(analysis_results: dict) -> list:
     """
     Generate handling suggestions for duplicate rows based on analysis results.
@@ -96,11 +104,11 @@ def suggest_duplicate_handling(analysis_results: dict) -> list:
     total_dup = dup_info.get('total_duplicates', 0)
     dup_pct = dup_info.get('duplicate_percentage', 0)
 
-    # --- Rule 1: No duplicates
+    # No duplicates
     if total_dup == 0:
         return suggestions
 
-    # --- Rule 2: Few duplicates (<1%)
+    # Few duplicates (<1%)
     if dup_pct <= 1:
         suggestions.append({
             'feature': 'rows',
@@ -110,7 +118,7 @@ def suggest_duplicate_handling(analysis_results: dict) -> list:
             'kwargs': {'subset': None}
         })
 
-    # --- Rule 3: Moderate duplicates (1–10%)
+    # Moderate duplicates (1–10%)
     elif 1 < dup_pct <= 10:
         suggestions.append({
             'feature': 'rows',
@@ -120,7 +128,7 @@ def suggest_duplicate_handling(analysis_results: dict) -> list:
             'kwargs': {'subset': None}
         })
 
-    # --- Rule 4: High duplicates (>10%)
+    # High duplicates (>10%)
     else:
         suggestions.append({
             'feature': 'rows',
