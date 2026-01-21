@@ -272,85 +272,71 @@ def suggest_outlier_handling(analysis_results: dict, target_column: str = None) 
     return suggestions
 
 
+# ===================================================================
+# Categorical Encoding
+# ===================================================================
 
 
 def suggest_categorical_encoding(analysis_results: dict, target_column: str = None) -> list:
     """
-    Generate encoding suggestions for categorical features based on analysis results.
-    
-    Args:
-        analysis_results: Dictionary from DataAnalyzer().run_full_analysis()
-        target_column: Name of the target column to skip or deal with differently.
-    
-    Returns:
-        list: Preprocessing suggestions for categorical encoding
+    Generate encoding suggestions.
+    Strategy:
+    - Binary (2) -> Label Encode (Simple 0/1).
+    - Low (3-10) -> One-Hot Encode (Preserves all info).
+    - Medium (11-50) -> Label Encode (Compact for Trees).
+    - High (>50) -> Frequency Encode (Captures popularity signal, low dim).
     """
     suggestions = []
     
-    # Extract info
     categorical_info = analysis_results.get('categorical_info', {})
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
     
     for col, info in categorical_info.items():
         if col == target_column:
-            # Skip target column suggestions for now
             continue
         
         unique_count = info.get('unique_values', 0)
-        value_counts = info.get('value_counts', {})
-        total_values = sum(value_counts.values()) if value_counts else 0
         
-        
-        # Skip numeric columns
-        if 'int' in data_types.get(col, '') or 'float' in data_types.get(col, ''):
+        dtype = data_types.get(col, '')
+        if 'int' in dtype or 'float' in dtype:
             continue
         
-        # Rule 1: Binary categorical (2 unique)
+        # Binary (2 unique values) -> Label Encode
         if unique_count == 2:
             suggestions.append({
                 'feature': col,
-                'issue': 'Binary categorical feature detected (2 unique values)',
-                'suggestion': 'Apply Binary Encoding to represent the two categories with binary bits.',
-                'function_to_call': 'binary_encode',
-                'kwargs': {'columns': col}
-            })
-        
-        # Rule 2: Ordinal-like pattern
-        elif any(keyword in col.lower() for keyword in ['level', 'grade', 'rank', 'score', 'stage', 'class']):
-            suggestions.append({
-                'feature': col,
-                'issue': 'Possible ordinal feature (name suggests order, e.g., Level, Rank, Grade)',
-                'suggestion': 'Apply Ordinal Encoding if the categories follow a natural order.',
-                'function_to_call': 'ordinal_encode',
-                'kwargs': {'columns': col, 'category_orders': None}
-            })
-        
-        # Rule 3: Low cardinality (3–10)
-        elif 3 <= unique_count <= 10:
-            suggestions.append({
-                'feature': col,
-                'issue': f'Low-cardinality feature ({unique_count} unique values)',
-                'suggestion': 'Apply One-Hot Encoding to create binary columns for each category.',
-                'function_to_call': 'one_hot_encode',
-                'kwargs': {'columns': col, 'drop_first': False}
-            })
-        
-        # Rule 4: Medium cardinality (10–50)
-        elif 10 < unique_count <= 50:
-            suggestions.append({
-                'feature': col,
-                'issue': f'Medium-cardinality categorical feature ({unique_count} unique values)',
-                'suggestion': 'Apply Label Encoding to convert categories to integer labels.',
+                'issue': 'Binary feature detected.',
+                'suggestion': 'Apply Label Encoding. This converts values to 0 and 1 efficiently.',
                 'function_to_call': 'label_encode',
                 'kwargs': {'columns': col}
             })
         
-        # Rule 5: High cardinality (>50)
-        elif unique_count > 50:
+        # Low Cardinality (3-10) -> One-Hot Encode
+        elif unique_count <= 10:
             suggestions.append({
                 'feature': col,
-                'issue': f'High-cardinality categorical feature ({unique_count} unique values)',
-                'suggestion': 'Apply Frequency Encoding to represent categories by their occurrence frequency.',
+                'issue': f'Low cardinality ({unique_count} categories).',
+                'suggestion': 'Apply One-Hot Encoding. This is the safest method as it assumes no false order between categories.',
+                'function_to_call': 'one_hot_encode',
+                'kwargs': {'columns': col, 'drop_first': False}
+            })
+        
+        # Medium Cardinality (11-50) -> Label Encode
+        elif unique_count <= 50:
+            suggestions.append({
+                'feature': col,
+                'issue': f'Medium cardinality ({unique_count} categories).',
+                'suggestion': 'Apply Label Encoding. Keeps dimensionality low.',
+                'function_to_call': 'label_encode',
+                'kwargs': {'columns': col}
+            })
+        
+        #  High Cardinality (>50) -> Frequency Encoding
+        else:
+            suggestions.append({
+                'feature': col,
+                'issue': f'High cardinality ({unique_count} categories).',
+                'suggestion': 'Apply Frequency Encoding. Represents categories by their prevalence, capturing signal without explosion.',
                 'function_to_call': 'frequency_encode',
                 'kwargs': {'columns': col}
             })

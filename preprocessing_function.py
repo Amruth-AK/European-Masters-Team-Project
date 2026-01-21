@@ -357,89 +357,8 @@ def apply_power_transform(df: pd.DataFrame, column: str, method: str = 'yeo-john
     return df
 
 
-
-
-def remove_outliers_iqr(df: pd.DataFrame, column: str, 
-                       whisker_width: float = 1.5,
-                       analysis_results: dict = None) -> pd.DataFrame:
-    """
-    Remove rows containing outliers using IQR method.
-    
-    Outliers are detected using the IQR (Interquartile Range) method:
-    - Lower bound: Q1 - whisker_width * IQR
-    - Upper bound: Q3 + whisker_width * IQR
-    
-    Rows with values outside these bounds are deleted from the DataFrame.
-    
-    Args:
-        df: Input DataFrame
-        column: Column name to process
-        whisker_width: Multiplier for IQR to define outlier boundaries.
-                      Default is 1.5 (standard box plot definition)
-        analysis_results: Optional dict from DataAnalyzer with pre-calculated bounds.
-                         If provided and contains bounds for this column, uses those.
-    
-    Returns:
-        DataFrame with outlier rows removed
-    
-    Example:
-        >>> df = remove_outliers_iqr(df, 'Fare')
-        >>> df = remove_outliers_iqr(df, 'Age', whisker_width=2.0)
-        >>> df = remove_outliers_iqr(df, 'Age', analysis_results=analysis_dict)
-    
-    Warning:
-        This method permanently removes rows from the dataset. 
-        Use with caution, especially if you have limited data.
-    """
-    df = df.copy()
-    
-    if column not in df.columns:
-        raise ValueError(f"Column '{column}' not found in DataFrame")
-    
-    # Check if column is numeric
-    if not pd.api.types.is_numeric_dtype(df[column]):
-        raise TypeError(f"Column '{column}' must be numeric for outlier detection")
-    
-    original_rows = len(df)
-    
-    # Try to use pre-calculated boundaries from analysis_results
-    if analysis_results and 'outlier_info' in analysis_results:
-        col_outlier_info = analysis_results['outlier_info'].get(column, {})
-        if 'lower_bound' in col_outlier_info and 'upper_bound' in col_outlier_info:
-            lower_bound = col_outlier_info['lower_bound']
-            upper_bound = col_outlier_info['upper_bound']
-        else:
-            # Calculate boundaries ourselves
-            q1 = df[column].quantile(0.25)
-            q3 = df[column].quantile(0.75)
-            iqr = q3 - q1
-            lower_bound = q1 - whisker_width * iqr
-            upper_bound = q3 + whisker_width * iqr
-    else:
-        # Calculate boundaries ourselves
-        q1 = df[column].quantile(0.25)
-        q3 = df[column].quantile(0.75)
-        iqr = q3 - q1
-        lower_bound = q1 - whisker_width * iqr
-        upper_bound = q3 + whisker_width * iqr
-    
-    # Identify outliers
-    outliers_mask = (df[column] < lower_bound) | (df[column] > upper_bound)
-    outliers_count = outliers_mask.sum()
-    
-    if outliers_count > 0:
-        print(f"Column '{column}': Removing {outliers_count} rows with outliers "
-              f"(outside range [{lower_bound:.2f}, {upper_bound:.2f}])")
-        print(f"Original rows: {original_rows}, Remaining rows: {original_rows - outliers_count}")
-    
-    # Remove outliers
-    df = df[~outliers_mask].reset_index(drop=True)
-    
-    return df
-
-
 # ============================================================================
-# Categorical Encoding - Amruth
+# Categorical Encoding
 # ============================================================================
 
 def one_hot_encode(df: pd.DataFrame, columns: Union[str, List[str]], drop_first: bool = False) -> pd.DataFrame:
@@ -511,88 +430,6 @@ def label_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFra
     return df
 
 
-def ordinal_encode(df: pd.DataFrame, columns: Union[str, List[str]], category_orders: Dict[str, List[str]] = None) -> pd.DataFrame:
-    """
-    Apply Ordinal Encoding to categorical columns.
-    
-    Maps categories to integers according to specified order.
-    If no order is provided, uses alphabetical order by default.
-    
-    Args:
-        df: Input DataFrame
-        columns: Column names to encode.
-        category_orders: Optional dictionary specifying category order per column.
-    
-    Returns:
-        DataFrame with ordinal-encoded columns
-    
-    Example:
-        >>> orders = {'Education': ['High School', 'Bachelors', 'Masters', 'PhD']}
-        >>> df = ordinal_encode(df, ['Education'], category_orders=orders)
-    """
-    df = df.copy()
-    columns = [columns] if isinstance(columns, str) else columns
-
-    for col in columns:
-        if col not in df.columns:
-            raise ValueError(f"Column '{col}' not found in DataFrame")
-
-        if pd.api.types.is_numeric_dtype(df[col]):
-            print(f"Warning: Column '{col}' is numeric; skipping ordinal encoding.")
-            continue
-
-        if category_orders and col in category_orders:
-            categories = [category_orders[col]]
-        else:
-            categories = [sorted(df[col].dropna().unique().tolist())]
-
-        oe = OrdinalEncoder(categories=categories)
-        df[col] = oe.fit_transform(df[[col]])
-
-    return df
-
-
-def binary_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFrame:
-    """
-    Apply Binary Encoding to categorical columns.
-    
-    Converts categories into binary code representations.
-    
-    Args:
-        df: Input DataFrame
-        columns: Column names to encode.
-    
-    Returns:
-        DataFrame with binary encoded columns
-    
-    Example:
-        >>> df = binary_encode(df, 'City')
-        >>> df = binary_encode(df, ['Country', 'Gender'])
-    """
-    df = df.copy()
-    columns = [columns] if isinstance(columns, str) else columns
-
-    for col in columns:
-        if col not in df.columns:
-            raise ValueError(f"Column '{col}' not found in DataFrame")
-
-        if pd.api.types.is_numeric_dtype(df[col]):
-            print(f"Warning: Column '{col}' is numeric; skipping binary encoding.")
-            continue
-
-        unique_vals = df[col].astype(str).unique()
-        mapping = {val: idx for idx, val in enumerate(unique_vals)}
-        df[col + '_bin'] = df[col].astype(str).map(mapping)
-
-        max_bits = int(np.ceil(np.log2(len(unique_vals)))) if len(unique_vals) > 1 else 1
-        for i in range(max_bits):
-            df[f"{col}_bit_{i}"] = df[col + '_bin'].apply(lambda x: (x >> i) & 1)
-        
-        df = df.drop(columns=[col, col + '_bin'])
-
-    return df
-
-
 def frequency_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFrame:
     """
     Apply Frequency Encoding to categorical columns.
@@ -621,13 +458,6 @@ def frequency_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.Dat
         df[col] = df[col].map(freq)
 
     return df
-
-# ============================================================================
-# Identifier Column Removal - Zhiqi
-# ============================================================================
-
-
-
 
 # ============================================================================
 # Datetime Feature Engineering - Zhiqi
