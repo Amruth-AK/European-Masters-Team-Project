@@ -1,5 +1,3 @@
-# pre_dashboard.py
-
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -20,12 +18,23 @@ from preprocessing_suggestions import (
 from preprocessing_registry import FUNC_MAP
 from preprocessing_pipeline import fit_preprocessing_pipeline
 
+# --- CALLBACK FUNCTION FOR "SELECT ALL" ---
+def toggle_group(step_name, count):
+    """
+    Callback to select/deselect all checkboxes in a group.
+    """
+    master_key = f"select_all_{step_name}"
+    master_value = st.session_state[master_key]
+    
+    for i in range(count):
+        child_key = f"select_{step_name}_{i}"
+        # Update the child checkbox state to match the master
+        st.session_state[child_key] = master_value
 
 
 def run_preprocessing_dashboard() -> pd.DataFrame:
     """
     Streamlit preprocessing dashboard using session state.
-    Works with st.session_state.df and st.session_state.analysis_results.
     """
     st.title("🛠 Preprocessing Suggestions")
 
@@ -69,37 +78,56 @@ def run_preprocessing_dashboard() -> pd.DataFrame:
         st.success("No preprocessing suggestions found — your dataset looks clean!")
         st.dataframe(current_df.head())
         st.session_state.pre_status = "applied"
-        st.session_state.transformation_pipeline = []
-        st.session_state.fitted_pipeline = []
         return current_df
 
     # --- Display suggestions ---
     selected_suggestions_list = []
 
     for step_name, suggestions in valid_steps:
-        with st.expander(f"🔹 {step_name}", expanded=False):
+        # Use columns to put the expander and a count badge or similar if desired
+        with st.expander(f"🔹 {step_name} ({len(suggestions)})", expanded=False):
+            
+            # --- "SELECT ALL" CHECKBOX ---
+            # This uses the callback defined above
+            st.checkbox(
+                "Select All in this category",
+                key=f"select_all_{step_name}",
+                value=True,
+                on_change=toggle_group,
+                args=(step_name, len(suggestions))
+            )
+            st.markdown("---") # Visual separator
+
             for i, sug in enumerate(suggestions):
                 key = f"select_{step_name}_{i}"
+                
+                # IMPORTANT: Initialize key in session state if not present
+                # This ensures the callback works even if the widget hasn't rendered yet
+                if key not in st.session_state:
+                    st.session_state[key] = True
+
                 col_chk, col_det = st.columns([0.05, 0.95])
                 with col_chk:
                     is_selected = st.checkbox(
                         "Select",
-                        value=True,
                         key=key,
+                        # No explicit 'value=' here because key in session_state takes precedence
                         label_visibility="collapsed"
                     )
                 with col_det:
                     st.markdown(f"**{sug['suggestion']}**")
                     st.caption(f"Feature: `{sug['feature']}` | Issue: {sug['issue']}")
+                
                 if is_selected:
                     selected_suggestions_list.append(sug)
 
-            st.divider()
+    st.divider()
 
     # --- Buttons to apply/ignore ---
     if st.session_state.pre_status is None:
         col1, col2 = st.columns([1, 1])
         n_selected = len(selected_suggestions_list)
+        
         apply_selected = col1.button(
             f"Apply Selected Suggestions ({n_selected})",
             key="apply_selected_btn",
@@ -112,6 +140,7 @@ def run_preprocessing_dashboard() -> pd.DataFrame:
             pipeline_to_save = []
             for sug in selected_suggestions_list:
                 if sug.get("function_to_call") is not None:
+                    # Pass dynamic params like FastICA ratio if they exist
                     if sug["function_to_call"] == "apply_fastica" and "fastica_replace_ratio" in st.session_state:
                         sug["kwargs"]["replace_ratio"] = st.session_state.fastica_replace_ratio
                     pipeline_to_save.append(sug)
@@ -146,4 +175,3 @@ def run_preprocessing_dashboard() -> pd.DataFrame:
     st.dataframe(st.session_state.pre_df.head())
 
     return st.session_state.pre_df
-

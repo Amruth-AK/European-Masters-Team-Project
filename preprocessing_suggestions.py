@@ -60,7 +60,7 @@ def suggest_missing_value_handling(analysis_results: dict, target_column: str = 
             suggestions.append({
                 'feature': col,
                 'issue': f'Missing values need replacement for model compatibility.',
-                'suggestion': 'Impute with Median. This is robust to outliers and safe for both linear and tree models when paired with an indicator.',
+                'suggestion': 'Impute with Median. This is robust to outliers.',
                 'function_to_call': 'impute_median',
                 'kwargs': {'columns': col}
             })

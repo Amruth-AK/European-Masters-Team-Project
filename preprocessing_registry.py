@@ -10,9 +10,7 @@ so that both pre_dashboard.py and preprocessing_pipeline.py can import it.
 from preprocessing_function import (
     delete_missing_columns,
     delete_missing_rows,
-    impute_mean,
     impute_median,
-    impute_mode,
     delete_duplicates,
     standard_scaler,
     minmax_scaler,
@@ -45,9 +43,7 @@ from preprocessing_function import (
 FUNC_MAP = {
     "delete_missing_columns": delete_missing_columns,
     "delete_missing_rows": delete_missing_rows,
-    "impute_mean": impute_mean,
     "impute_median": impute_median,
-    "impute_mode": impute_mode,
     "impute_constant": impute_constant,             
     "add_missing_indicator": add_missing_indicator, 
     "delete_duplicates": delete_duplicates,
