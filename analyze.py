@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from scipy.stats import skew
+from scipy.stats import skew, kurtosis
 from scipy.stats import mode as sci_mode
 from typing import List, Optional
 import re
@@ -257,7 +257,10 @@ class DataAnalyzer:
         total_rows = len(self.df)
         for col in numerical_cols:
             col_data = self.df[col].dropna()
-            self.results['distributions'][col] = {'skewness': skew(col_data)}
+            self.results['distributions'][col] = {
+                'skewness': skew(col_data),
+                'kurtosis': kurtosis(col_data)
+            }
             counts, bin_edges = np.histogram(col_data, bins='auto')
             self.results['histogram_data'][col] = {
                 'counts': counts.tolist(),

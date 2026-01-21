@@ -13,6 +13,23 @@ import itertools
 from sklearn.preprocessing import PowerTransformer
 
 # ============================================================================
+# Identifier Removal
+# ===========================================================================
+
+def remove_identifier_columns(df, id_columns=None, **kwargs):
+    """
+    Remove identifier columns detected by DataAnalyzer.
+    """
+    if not id_columns:
+        return df
+
+    cols_to_drop = [col for col in id_columns if col in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+
+    return df
+
+# ============================================================================
 # Missing Values
 # ============================================================================
 
@@ -609,18 +626,7 @@ def frequency_encode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.Dat
 # Identifier Column Removal - Zhiqi
 # ============================================================================
 
-def remove_identifier_columns(df, id_columns=None, **kwargs):
-    """
-    Remove identifier columns detected by DataAnalyzer.
-    """
-    if not id_columns:
-        return df
 
-    cols_to_drop = [col for col in id_columns if col in df.columns]
-    if cols_to_drop:
-        df = df.drop(columns=cols_to_drop)
-
-    return df
 
 
 # ============================================================================

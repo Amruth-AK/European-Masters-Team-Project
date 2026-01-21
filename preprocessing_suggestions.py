@@ -4,6 +4,35 @@ import itertools
 from preprocessing_registry import FUNC_MAP, decide_correlation_threshold, assess_ica_necessity
 
 # ===================================================================
+# Identifier Removal
+# ===================================================================
+
+def suggest_identifier_removal(analysis_results: dict) -> list:
+    """
+    Generate suggestions to remove identifier columns using the ID columns
+    already detected by DataAnalyzer in analyze.py.
+    """
+    suggestions = []
+
+    # Get the ID columns that were already detected and ignored in duplicate analysis
+    row_dup_info = analysis_results.get('row_duplicate_info', {})
+    identifier_cols = row_dup_info.get('ignored_columns', [])
+
+    if not identifier_cols:
+        return suggestions
+
+    suggestions.append({
+        'feature': ', '.join(identifier_cols),
+        'issue': f"Identifier column(s) detected: {', '.join(identifier_cols)}",
+        'suggestion': 'Remove identifier columns as they typically have no '
+                      'predictive value and can negatively impact model performance.',
+        'function_to_call': 'remove_identifier_columns',
+        'kwargs': {'id_columns': identifier_cols}
+    })
+
+    return suggestions
+
+# ===================================================================
 # Missing Values
 # ===================================================================
 
@@ -182,12 +211,18 @@ def suggest_numerical_scaling(analysis_results: dict, target_column: str = None)
     
     return suggestions
 
+# ===================================================================
+# Outlier Handling
+# ===================================================================
+
 
 def suggest_outlier_handling(analysis_results: dict, target_column: str = None) -> list:
     """
-    Generate outlier suggestions.
-    High Skew (>2.0) -> Yeo-Johnson
-    Moderate Skew/Outliers -> Winsorization
+    Smart Outlier Suggestions.
+    Strategy:
+    - High Skew (>1.0) -> Yeo-Johnson (Fix shape).
+    - High Kurtosis (>3.0) -> Winsorization (Tame heavy tails).
+    - Low Kurtosis + Outliers -> IQR Clipping (Remove anomalies).
     """
     suggestions = []
     
@@ -195,33 +230,43 @@ def suggest_outlier_handling(analysis_results: dict, target_column: str = None) 
     distributions = analysis_results.get('distributions', {})
     
     for col, info in outlier_info.items():
-        if col == target_column:
-            continue
+        if col == target_column: continue
         
         outlier_count = info.get('outlier_count', 0)
-        if outlier_count == 0:
-            continue
+        if outlier_count == 0: continue
             
-        skewness = distributions.get(col, {}).get('skewness', 0)
+        dist_stats = distributions.get(col, {})
+        skewness = dist_stats.get('skewness', 0)
+        col_kurtosis = dist_stats.get('kurtosis', 0) 
         
-        # Rule 1: Extreme Skewness (> 2.0) -> Power Transform
-        if abs(skewness) > 2.0:
+        # High Skew -> Power Transform
+        if abs(skewness) > 1.0:
             suggestions.append({
                 'feature': col,
-                'issue': f'High skewness ({skewness:.2f}) and {outlier_count} outliers detected.',
-                'suggestion': 'Apply Yeo-Johnson transformation. This compresses tails and handles outliers better than clipping for skewed financial data.',
+                'issue': f'High skewness ({skewness:.2f}) detected.',
+                'suggestion': 'Apply Yeo-Johnson transformation. This compresses tails and normalizes the distribution.',
                 'function_to_call': 'apply_power_transform',
                 'kwargs': {'column': col, 'method': 'yeo-johnson'}
             })
             
-        # Rule 2: Outliers exist but not super skewed -> Winsorization
+        # Heavy Tails (High Kurtosis) -> Winsorization
+        elif col_kurtosis > 3.0:
+            suggestions.append({
+                'feature': col,
+                'issue': f'Heavy tails detected (Kurtosis {col_kurtosis:.2f}). Extremes are likely valid but rare.',
+                'suggestion': 'Apply Winsorization (cap at 1% and 99%). This preserves the data density while limiting extreme influence.',
+                'function_to_call': 'winsorize_column',
+                'kwargs': {'column': col, 'limits': (0.01, 0.99)}
+            })
+
+        # Light Tails + Outliers -> IQR Clipping
         else:
             suggestions.append({
                 'feature': col,
-                'issue': f'Feature contains {outlier_count} outliers.',
-                'suggestion': 'Apply Winsorization (capping at 1st and 99th percentiles). This limits extreme values without removing data points.',
-                'function_to_call': 'winsorize_column',
-                'kwargs': {'column': col, 'limits': (0.01, 0.99)}
+                'issue': f'Feature contains {outlier_count} isolated outliers.',
+                'suggestion': 'Cap outliers using IQR method. These appear to be anomalies disconnected from the main distribution.',
+                'function_to_call': 'clip_outliers_iqr',
+                'kwargs': {'column': col, 'whisker_width': 1.5}
             })
             
     return suggestions
@@ -312,30 +357,7 @@ def suggest_categorical_encoding(analysis_results: dict, target_column: str = No
     
     return suggestions
 
-def suggest_identifier_removal(analysis_results: dict) -> list:
-    """
-    Generate suggestions to remove identifier columns using the ID columns
-    already detected by DataAnalyzer in analyze.py.
-    """
-    suggestions = []
 
-    # Get the ID columns that were already detected and ignored in duplicate analysis
-    row_dup_info = analysis_results.get('row_duplicate_info', {})
-    identifier_cols = row_dup_info.get('ignored_columns', [])
-
-    if not identifier_cols:
-        return suggestions
-
-    suggestions.append({
-        'feature': ', '.join(identifier_cols),
-        'issue': f"Identifier column(s) detected: {', '.join(identifier_cols)}",
-        'suggestion': 'Remove identifier columns as they typically have no '
-                      'predictive value and can negatively impact model performance.',
-        'function_to_call': 'remove_identifier_columns',
-        'kwargs': {'id_columns': identifier_cols}
-    })
-
-    return suggestions
 
 
 
