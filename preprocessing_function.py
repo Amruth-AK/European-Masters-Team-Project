@@ -141,7 +141,7 @@ def delete_duplicates(df: pd.DataFrame, subset: Union[str, List[str], None] = No
 
 
 # ============================================================================
-# Numerical Features - Zhiqi
+# Numerical Scaling
 # ============================================================================
 
 def standard_scaler(df: pd.DataFrame, column: Union[str, List[str]]) -> pd.DataFrame:
@@ -163,7 +163,6 @@ def standard_scaler(df: pd.DataFrame, column: Union[str, List[str]]) -> pd.DataF
     """
     df = df.copy()
     
-    # Convert single column to list for uniform processing
     columns = [column] if isinstance(column, str) else column
     
     for col in columns:
@@ -188,52 +187,32 @@ def standard_scaler(df: pd.DataFrame, column: Union[str, List[str]]) -> pd.DataF
     return df
 
 
-def minmax_scaler(df: pd.DataFrame, column: Union[str, List[str]], 
-                  feature_range: tuple = (0, 1)) -> pd.DataFrame:
+def robust_scaler(df: pd.DataFrame, column: Union[str, List[str]], 
+                  quantile_range: tuple = (25.0, 75.0)) -> pd.DataFrame:
     """
-    Apply Min-Max scaling to numerical column(s).
-    
-    Formula: x_scaled = (x - min) / (max - min) * (max_range - min_range) + min_range
-    
-    Args:
-        df: Input DataFrame
-        column: Column name(s) to scale. Can be a single string or list of strings.
-        feature_range: Desired range of transformed data (min, max). Default is (0, 1).
-    
-    Returns:
-        DataFrame with scaled column(s)
-    
-    Example:
-        >>> df = minmax_scaler(df, 'Age')
-        >>> df = minmax_scaler(df, ['Age', 'Fare'], feature_range=(0, 1))
+    Scale features using statistics that are robust to outliers.
+    Formula: (x - median) / (q75 - q25)
     """
     df = df.copy()
-    
-    # Convert single column to list for uniform processing
     columns = [column] if isinstance(column, str) else column
     
-    min_range, max_range = feature_range
+    q_min, q_max = quantile_range
     
     for col in columns:
-        if col not in df.columns:
-            raise ValueError(f"Column '{col}' not found in DataFrame")
+        if col not in df.columns or not pd.api.types.is_numeric_dtype(df[col]):
+            continue
+            
+        median = df[col].median()
+        q1 = df[col].quantile(q_min / 100.0)
+        q3 = df[col].quantile(q_max / 100.0)
+        iqr = q3 - q1
         
-        # Check if column is numeric
-        if not pd.api.types.is_numeric_dtype(df[col]):
-            raise TypeError(f"Column '{col}' must be numeric for min-max scaling")
-        
-        # Calculate min and max, ignoring NaN values
-        col_min = df[col].min()
-        col_max = df[col].max()
-        
-        # Avoid division by zero
-        if col_max == col_min:
-            print(f"Warning: Column '{col}' has constant values. Setting to min_range.")
-            df[col] = min_range
+        if iqr == 0:
+            print(f"Warning: IQR is 0 for '{col}', RobustScaling limited to centering.")
+            df[col] = df[col] - median
         else:
-            # Apply min-max scaling
-            df[col] = (df[col] - col_min) / (col_max - col_min) * (max_range - min_range) + min_range
-    
+            df[col] = (df[col] - median) / iqr
+            
     return df
 
 
@@ -361,33 +340,7 @@ def apply_power_transform(df: pd.DataFrame, column: str, method: str = 'yeo-john
     return df
 
 
-def robust_scaler(df: pd.DataFrame, column: Union[str, List[str]], 
-                  quantile_range: tuple = (25.0, 75.0)) -> pd.DataFrame:
-    """
-    Scale features using statistics that are robust to outliers.
-    Formula: (x - median) / (q75 - q25)
-    """
-    df = df.copy()
-    columns = [column] if isinstance(column, str) else column
-    
-    q_min, q_max = quantile_range
-    
-    for col in columns:
-        if col not in df.columns or not pd.api.types.is_numeric_dtype(df[col]):
-            continue
-            
-        median = df[col].median()
-        q1 = df[col].quantile(q_min / 100.0)
-        q3 = df[col].quantile(q_max / 100.0)
-        iqr = q3 - q1
-        
-        if iqr == 0:
-            print(f"Warning: IQR is 0 for '{col}', RobustScaling limited to centering.")
-            df[col] = df[col] - median
-        else:
-            df[col] = (df[col] - median) / iqr
-            
-    return df
+
 
 def remove_outliers_iqr(df: pd.DataFrame, column: str, 
                        whisker_width: float = 1.5,

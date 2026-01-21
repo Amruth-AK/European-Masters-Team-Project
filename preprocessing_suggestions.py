@@ -141,25 +141,26 @@ def suggest_duplicate_handling(analysis_results: dict) -> list:
     return suggestions
 
 
+# ===================================================================
+# Numerical Scaling
+# ===================================================================
+
 def suggest_numerical_scaling(analysis_results: dict, target_column: str = None) -> list:
     """
     Generate scaling suggestions. Prefer RobustScaler if outliers exist.
     """
     suggestions = []
     
-    # Get info
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
     outlier_info = analysis_results.get('outlier_info', {})
-    distributions = analysis_results.get('distributions', {})
     
     numerical_cols = [col for col, dtype in data_types.items() 
                      if ('int' in dtype or 'float' in dtype) and col != target_column]
     
     for col in numerical_cols:
         outlier_count = outlier_info.get(col, {}).get('outlier_count', 0)
-        skewness = distributions.get(col, {}).get('skewness', 0)
         
-        # Rule 1: Outliers Detected -> Robust Scaler
+        # Outliers Detected -> Robust Scaler
         if outlier_count > 0:
             suggestions.append({
                 'feature': col,
@@ -169,24 +170,14 @@ def suggest_numerical_scaling(analysis_results: dict, target_column: str = None)
                 'kwargs': {'column': col, 'quantile_range': (25.0, 75.0)}
             })
             
-        # Rule 2: High Skew, No Outliers -> Standard Scaler (Center data)
-        elif abs(skewness) > 1:
+        # No Outliers -> Standard Scaler (Center data)
+        else:
             suggestions.append({
                 'feature': col,
                 'issue': 'High skewness but no extreme outliers.',
                 'suggestion': 'Apply Standard Scaling (Z-score) to center the data.',
                 'function_to_call': 'standard_scaler',
                 'kwargs': {'column': col}
-            })
-            
-        # Rule 3: Normal-ish -> MinMax
-        else:
-            suggestions.append({
-                'feature': col,
-                'issue': 'Data is relatively uniform.',
-                'suggestion': 'Apply Min-Max scaling to map to [0,1].',
-                'function_to_call': 'minmax_scaler',
-                'kwargs': {'column': col, 'feature_range': (0, 1)}
             })
     
     return suggestions
