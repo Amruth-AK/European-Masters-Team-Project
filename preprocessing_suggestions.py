@@ -5,99 +5,75 @@ from preprocessing_registry import FUNC_MAP, decide_correlation_threshold, asses
 
 def suggest_missing_value_handling(analysis_results: dict, target_column: str = None) -> list:
     """
-    Generate robust missing value suggestions.
-    
-    Revised Strategy for High-Risk Data:
-    1. NEVER drop columns unless empty (>99%).
-    2. High Missing (>30%): Impute Adaptive Constant + Indicator.
-       (Calculates a constant strictly outside the data range).
-    3. Low Missing (<=30%): Impute Median + Indicator.
+    Robust, model-agnostic missing value suggestions.
+    Strategy: 
+    - Numerics: "Median + Indicator".
+    - Categoricals: "Unknown" Category (Preserves missingness info).
     """
     suggestions = []
 
     missing_info = analysis_results.get('missing_values', {})
     data_types = analysis_results.get('general_info', {}).get('data_types', {})
-    # Get stats to find min/max for safe constants
-    desc_stats = analysis_results.get('descriptive_statistics', {})
-
+    
     for col, info in missing_info.items():
         missing_pct = info.get('missing_percentage', 0)
         dtype = data_types.get(col, '')
         
-        if col == target_column or missing_pct == 0:
+        #No missing values
+        if missing_pct == 0:
             continue
 
-        # --- Rule 1: Empty Columns (>99%) -> Drop
-        if missing_pct > 99:
+        #Target Variable -> Drop Rows
+        if col == target_column:
             suggestions.append({
                 'feature': col,
-                'issue': f'{missing_pct:.2f}% missing values (effectively empty).',
-                'suggestion': 'Drop column.',
-                'function_to_call': 'delete_missing_columns',
-                'kwargs': {'threshold': 0.99}
+                'issue': f'Target column contains {missing_pct:.2f}% missing values.',
+                'suggestion': 'Drop rows where target is missing (cannot train on unknown targets).',
+                'function_to_call': 'delete_missing_rows',
+                'kwargs': {'threshold': 0.0} # 0.0 = drop any row with NaN in this column
             })
             continue
 
-        # --- Always Suggest Indicator ---
-        if missing_pct >= 1:
+        #>95% missing -> Drop
+        if missing_pct > 95:
             suggestions.append({
                 'feature': col,
-                'issue': f'{missing_pct:.2f}% missing. Missingness pattern might be predictive.',
-                'suggestion': 'Add "Is Missing" indicator.',
+                'issue': f'{missing_pct:.2f}% missing (effectively empty).',
+                'suggestion': 'Drop column (insufficient signal).',
+                'function_to_call': 'delete_missing_columns',
+                'kwargs': {'threshold': 0.95}
+            })
+            continue
+
+        #NUMERICAL: Indicator + Median
+        if 'int' in dtype or 'float' in dtype:
+            # Add Indicator
+            suggestions.append({
+                'feature': col,
+                'issue': f'{missing_pct:.2f}% missing values detected.',
+                'suggestion': 'Add "Is_Missing" indicator to capture if missingness itself is predictive.',
                 'function_to_call': 'add_missing_indicator',
                 'kwargs': {'columns': col}
             })
+            
+            # Impute Median
+            suggestions.append({
+                'feature': col,
+                'issue': f'Missing values need replacement for model compatibility.',
+                'suggestion': 'Impute with Median. This is robust to outliers and safe for both linear and tree models when paired with an indicator.',
+                'function_to_call': 'impute_median',
+                'kwargs': {'columns': col}
+            })
 
-        # --- Rule 2: High Missingness (>30%) -> Adaptive Constant
-        if missing_pct > 30:
-            if 'float' in dtype or 'int' in dtype:
-                # Calculate safe constant
-                col_stats = desc_stats.get(col, {})
-                min_val = col_stats.get('min')
-                
-                # Default to -999 if stats are missing or min >= 0
-                fill_value = -999
-                
-                if min_val is not None:
-                    # If data goes below -900, we need a lower constant
-                    if min_val < -900:
-                        # Move 1000 units below the minimum to be safe
-                        fill_value = float(int(min_val) - 1000)
-                
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'High missingness ({missing_pct:.2f}%). Median imputation might distort distribution.',
-                    'suggestion': f'Impute with Constant ({fill_value}). This value is outside the data range (Min: {min_val}), isolating missing values for tree models.',
-                    'function_to_call': 'impute_constant',
-                    'kwargs': {'columns': col, 'fill_value': fill_value}
-                })
-            else:
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'High missingness ({missing_pct:.2f}%) in categorical feature.',
-                    'suggestion': 'Impute with Constant "Unknown".',
-                    'function_to_call': 'impute_constant',
-                    'kwargs': {'columns': col, 'fill_value': 'Unknown'}
-                })
-
-        # --- Rule 3: Low/Moderate Missingness (<=30%) -> Median/Mode
+        # CATEGORICAL: Constant "Unknown"
         else:
-            if 'float' in dtype or 'int' in dtype:
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'Moderate missingness ({missing_pct:.2f}%).',
-                    'suggestion': 'Impute with Median (robust to outliers).',
-                    'function_to_call': 'impute_median',
-                    'kwargs': {'columns': col}
-                })
-            else:
-                suggestions.append({
-                    'feature': col,
-                    'issue': f'Moderate missingness ({missing_pct:.2f}%).',
-                    'suggestion': 'Impute with Mode.',
-                    'function_to_call': 'impute_mode',
-                    'kwargs': {'columns': col}
-                })
+            suggestions.append({
+                'feature': col,
+                'issue': f'{missing_pct:.2f}% missing values in categorical feature.',
+                'suggestion': 'Impute with new category "Unknown". Preserves missingness information without guessing.',
+                'function_to_call': 'impute_constant',
+                'kwargs': {'columns': col, 'fill_value': 'Unknown'}
+            })
 
     return suggestions
 

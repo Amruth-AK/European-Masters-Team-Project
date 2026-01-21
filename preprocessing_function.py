@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 from typing import Union, List, Dict, Optional, Any
 from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, StandardScaler
-from sklearn.impute import KNNImputer
 from sklearn.model_selection import cross_val_score, StratifiedKFold, KFold
 from sklearn.base import clone
 from sklearn.metrics import make_scorer, mean_squared_error, roc_auc_score, log_loss
@@ -13,13 +12,6 @@ from sklearn.decomposition import FastICA
 import itertools
 from sklearn.preprocessing import PowerTransformer
 
-
-
-# ===================================================================
-# Missing values - Tecla
-# ===================================================================
-
-#================DELETION=============================
 
 def delete_missing_rows(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataFrame:
     """
@@ -67,38 +59,6 @@ def delete_missing_columns(df: pd.DataFrame, threshold: float = 0.5) -> pd.DataF
     return df.drop(columns=cols_to_drop)
 
 
-
-
-
-
-#==================IMPUTATION=============
-def impute_mean(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFrame:
-    """
-    Impute missing values in numeric column(s) using the mean.
-
-    Args:
-        df: Input DataFrame
-        columns: Column name(s) to impute. Can be string or list of strings.
-
-    Returns:
-        DataFrame with missing values imputed.
-
-    Example:
-        >>> df = impute_mean(df, 'Age')
-        >>> df = impute_mean(df, ['Age', 'Fare'])
-    """
-    df = df.copy()
-    columns = [columns] if isinstance(columns, str) else columns
-
-    for col in columns:
-        if col not in df.columns:
-            raise ValueError(f"Column '{col}' not found in DataFrame")
-        mean_value = df[col].mean()
-        df[col] = df[col].fillna(mean_value)
-        print(f"Imputed missing values in '{col}' with mean={mean_value:.3f}")
-    return df
-
-
 def impute_median(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFrame:
     """
     Impute missing values in numeric column(s) using the median.
@@ -115,28 +75,9 @@ def impute_median(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFr
     return df
 
 
-def impute_mode(df: pd.DataFrame, columns: Union[str, List[str]]) -> pd.DataFrame:
+def impute_constant(df: pd.DataFrame, columns: Union[str, List[str]], fill_value: Any = -1) -> pd.DataFrame:
     """
-    Impute missing values using the mode (most frequent value).
-
-    Suitable for categorical or discrete numerical columns.
-    """
-    df = df.copy()
-    columns = [columns] if isinstance(columns, str) else columns
-
-    for col in columns:
-        if col not in df.columns:
-            raise ValueError(f"Column '{col}' not found in DataFrame")
-        mode_value = df[col].mode().iloc[0]
-        df[col] = df[col].fillna(mode_value)
-        print(f"Imputed missing values in '{col}' with mode={mode_value}")
-    return df
-
-
-def impute_constant(df: pd.DataFrame, columns: Union[str, List[str]], fill_value: float = -1) -> pd.DataFrame:
-    """
-    Impute missing values with a constant (e.g. -1, -999, 0).
-    Useful for tree models to isolate missing data in a specific leaf.
+    Impute missing values with a constant.
     """
     df = df.copy()
     columns = [columns] if isinstance(columns, str) else columns
@@ -160,7 +101,7 @@ def add_missing_indicator(df: pd.DataFrame, columns: Union[str, List[str]]) -> p
     for col in columns:
         if col not in df.columns:
             continue
-        # Create new column
+        
         new_col = f"{col}_is_missing"
         df[new_col] = df[col].isnull().astype(int)
         print(f"Added indicator column '{new_col}'")
