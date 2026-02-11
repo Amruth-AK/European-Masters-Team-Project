@@ -1,0 +1,68 @@
+[2026-02-10 20:08:45] ERROR: Intervention cyclical_encode on day failed
+Exception: 'Categorical' with dtype category does not support reduction 'median'
+Traceback (most recent call last):
+  File "c:\Users\adria\Documents\Uni\Master\Uni Mannheim\3. Semester\team project\a new prototype\DataCollector2.py", line 1127, in _apply_intervention
+    med_val = X_train[col_to_transform].median()
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\series.py", line 6580, in median
+    return NDFrame.median(self, axis, skipna, numeric_only, **kwargs)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\generic.py", line 12496, in median
+    return self._stat_function(
+           ~~~~~~~~~~~~~~~~~~~^
+        "median", nanops.nanmedian, axis, skipna, numeric_only, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\generic.py", line 12442, in _stat_function
+    return self._reduce(
+           ~~~~~~~~~~~~^
+        func, name=name, axis=axis, skipna=skipna, numeric_only=numeric_only
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\series.py", line 6464, in _reduce
+    return delegate._reduce(name, skipna=skipna, **kwds)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\arrays\categorical.py", line 2391, in _reduce
+    result = super()._reduce(name, skipna=skipna, keepdims=keepdims, **kwargs)
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\arrays\base.py", line 1954, in _reduce
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: 'Categorical' with dtype category does not support reduction 'median'
+
+--------------------------------------------------------------------------------
+[2026-02-10 20:34:21] ERROR: Intervention cyclical_encode on day failed
+Exception: 'Categorical' with dtype category does not support reduction 'median'
+Traceback (most recent call last):
+  File "c:\Users\adria\Documents\Uni\Master\Uni Mannheim\3. Semester\team project\a new prototype\DataCollector2.py", line 1127, in _apply_intervention
+    med_val = X_train[col_to_transform].median()
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\series.py", line 6580, in median
+    return NDFrame.median(self, axis, skipna, numeric_only, **kwargs)
+           ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\generic.py", line 12496, in median
+    return self._stat_function(
+           ~~~~~~~~~~~~~~~~~~~^
+        "median", nanops.nanmedian, axis, skipna, numeric_only, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\generic.py", line 12442, in _stat_function
+    return self._reduce(
+           ~~~~~~~~~~~~^
+        func, name=name, axis=axis, skipna=skipna, numeric_only=numeric_only
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\series.py", line 6464, in _reduce
+    return delegate._reduce(name, skipna=skipna, **kwds)
+           ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\arrays\categorical.py", line 2391, in _reduce
+    result = super()._reduce(name, skipna=skipna, keepdims=keepdims, **kwargs)
+  File "C:\Users\adria\miniconda3\Lib\site-packages\pandas\core\arrays\base.py", line 1954, in _reduce
+    raise TypeError(
+    ...<2 lines>...
+    )
+TypeError: 'Categorical' with dtype category does not support reduction 'median'
+
+--------------------------------------------------------------------------------

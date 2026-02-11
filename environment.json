@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-02-11T00:26:42.388319",
+  "numpy_version": "2.4.0",
+  "pandas_version": "2.3.3",
+  "lightgbm_version": "4.6.0",
+  "n_folds": 10,
+  "n_repeats": 1,
+  "max_tasks": 100,
+  "store_fold_scores": false,
+  "version": "v4"
+}
