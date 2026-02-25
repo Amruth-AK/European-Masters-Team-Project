@@ -68,7 +68,7 @@ from collections import defaultdict
 from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import KFold, GroupKFold
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.cluster import KMeans
+from sklearn.cluster import KMeans, SpectralClustering
 import lightgbm as lgb
 
 warnings.filterwarnings('ignore')
@@ -1448,18 +1448,21 @@ class HPEnsemblePredictor:
 # DATASET ARCHETYPE CLUSTERING
 # =============================================================================
 
-def compute_archetypes(df, n_clusters=6):
+def compute_archetypes(df, n_clusters=6, cluster_method='kmeans'):
     """
     Cluster datasets by their optimal HP profiles.
 
-    For each dataset, extract the best-performing HP config, then K-Means
-    cluster the HP value vectors. Each cluster becomes a named archetype
-    with an average HP config.
+    For each dataset, extract the best-performing HP config, then cluster
+    the HP value vectors (K-Means or Spectral). Each cluster becomes a
+    named archetype with an average HP config.
+
+    cluster_method: 'kmeans' or 'spectral'. Spectral has no .predict() for
+    new points; inference uses nearest training point's label (saved in pkl).
 
     Returns: dict with cluster info, or None if insufficient data.
     """
     print(f"\n{'='*60}")
-    print(f"Computing Dataset Archetypes ({n_clusters} clusters)...")
+    print(f"Computing Dataset Archetypes ({n_clusters} clusters, {cluster_method})...")
 
     if 'dataset_name' not in df.columns:
         print("  WARNING: No dataset_name column. Skipping archetypes.")
@@ -1484,13 +1487,24 @@ def compute_archetypes(df, n_clusters=6):
         if param in ['learning_rate', 'n_estimators', 'reg_alpha', 'reg_lambda']:
             X_hp[col] = np.log1p(X_hp[col].clip(lower=1e-10))
 
-    # Standardize for KMeans
+    # Standardize
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X_hp.fillna(X_hp.median()))
+    X_scaled = np.nan_to_num(X_scaled, nan=0.0, posinf=0.0, neginf=0.0)
 
     # Cluster
-    kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
-    labels = kmeans.fit_predict(X_scaled)
+    if cluster_method == 'spectral':
+        n_neighbors = min(10, max(2, len(X_scaled) // max(1, n_clusters)))
+        model = SpectralClustering(
+            n_clusters=n_clusters,
+            affinity='nearest_neighbors',
+            n_neighbors=n_neighbors,
+            random_state=42,
+        )
+        labels = model.fit_predict(X_scaled)
+    else:
+        model = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
+        labels = model.fit_predict(X_scaled)
     best_rows = best_rows.copy()
     best_rows['archetype_cluster'] = labels
 
@@ -1570,13 +1584,21 @@ def compute_archetypes(df, n_clusters=6):
               f"depth={avg_hp.get('max_depth')}, "
               f"n_est={avg_hp.get('n_estimators')}")
 
-    return {
+    out = {
         'archetypes': archetypes,
         'n_clusters': n_clusters,
-        'kmeans_model': kmeans,
         'scaler': scaler,
         'hp_cols_used': hp_cols,
+        'cluster_method': cluster_method,
+        'cluster_model': model,
     }
+    if cluster_method == 'kmeans':
+        out['kmeans_model'] = model  # backward compat for assign_config_to_archetype
+    else:
+        # Spectral has no .predict(); inference will use nearest training point
+        out['X_scaled_train'] = X_scaled
+        out['train_labels'] = labels
+    return out
 
 
 # =============================================================================
@@ -1657,7 +1679,7 @@ MIN_SAMPLES_PER_TASK = 100
 
 
 def _train_single_task(df_tt: pd.DataFrame, task_type: str, output_subdir: str,
-                       top_k: int = 3, n_clusters: int = 6):
+                       top_k: int = 3, n_clusters: int = 6, cluster_method: str = 'kmeans'):
     """
     Train the full HP meta-model pipeline for one task type; save to output_subdir.
     Returns a dict with task_type, n_samples, n_datasets, cv_scores for manifest.
@@ -1701,7 +1723,7 @@ def _train_single_task(df_tt: pd.DataFrame, task_type: str, output_subdir: str,
     else:
         print("  WARNING: No dataset_ids -- skipping ranker.")
 
-    archetype_data = compute_archetypes(df_tt, n_clusters=n_clusters)
+    archetype_data = compute_archetypes(df_tt, n_clusters=n_clusters, cluster_method=cluster_method)
 
     preparator.save(os.path.join(output_subdir, 'hp_preparator.pkl'))
     scorer.save(os.path.join(output_subdir, 'hp_scorer.pkl'))
@@ -1746,7 +1768,14 @@ def _train_single_task(df_tt: pd.DataFrame, task_type: str, output_subdir: str,
 
 
 def train_hp_meta_model(hp_db_path: str, output_dir: str = './hp_meta_model',
-                        top_k: int = 3, n_clusters: int = 6, per_task_type: bool = False):
+                        top_k: int = 3, n_clusters: int = 6, per_task_type: bool = False,
+                        holdout_ratio: float = 0.0, holdout_seed: int = 42,
+                        cluster_method: str = 'kmeans'):
+    """
+    holdout_ratio: fraction of datasets to hold out for evaluation (0 = no hold-out).
+    When > 0, those datasets are excluded from training and their names are saved to
+    output_dir/holdout_datasets.json so the evaluation notebook can evaluate only on them.
+    """
     os.makedirs(output_dir, exist_ok=True)
 
     print("=" * 70)
@@ -1763,7 +1792,26 @@ def train_hp_meta_model(hp_db_path: str, output_dir: str = './hp_meta_model',
         print("ERROR: Empty database!")
         return
 
-    # --- Analysis ---
+    # --- Hold-out split (by dataset) to avoid evaluation leakage ---
+    holdout_datasets = []
+    if holdout_ratio > 0 and 'dataset_name' in df.columns:
+        all_ds = df['dataset_name'].unique().tolist()
+        n = len(all_ds)
+        if n >= 2:
+            n_holdout = max(1, min(n - 1, int(round(n * holdout_ratio))))
+            rng = np.random.RandomState(holdout_seed)
+            perm = rng.permutation(n)
+            holdout_datasets = [all_ds[i] for i in perm[-n_holdout:]]
+            holdout_set = set(holdout_datasets)
+            df = df[~df['dataset_name'].isin(holdout_set)].copy()
+            print(f"\n  Hold-out: {n_holdout} datasets excluded for evaluation (ratio={holdout_ratio}, seed={holdout_seed})")
+            print(f"  Training on {n - n_holdout} datasets, {len(df)} rows")
+        else:
+            print("\n  Hold-out skipped: fewer than 2 datasets.")
+    elif holdout_ratio > 0:
+        print("\n  Hold-out skipped: no 'dataset_name' column.")
+
+    # --- Analysis (on training set only) ---
     print_hp_analysis(df)
 
     # --- Per-task-type branch ---
@@ -1776,7 +1824,7 @@ def train_hp_meta_model(hp_db_path: str, output_dir: str = './hp_meta_model',
                 print(f"\n  Skipping task_type '{task_type}': {len(df_tt)} samples < {MIN_SAMPLES_PER_TASK}")
                 continue
             out_subdir = os.path.join(output_dir, task_type)
-            r = _train_single_task(df_tt, task_type, out_subdir, top_k=top_k, n_clusters=n_clusters)
+            r = _train_single_task(df_tt, task_type, out_subdir, top_k=top_k, n_clusters=n_clusters, cluster_method=cluster_method)
             results.append(r)
         cv_summary = {}
         for r in results:
@@ -1795,6 +1843,17 @@ def train_hp_meta_model(hp_db_path: str, output_dir: str = './hp_meta_model',
         }
         with open(os.path.join(output_dir, 'hp_manifest.json'), 'w') as f:
             json.dump(manifest, f, indent=2, default=str)
+        if holdout_datasets:
+            holdout_meta = {
+                'holdout_ratio': holdout_ratio,
+                'seed': holdout_seed,
+                'holdout_datasets': sorted(holdout_datasets),
+                'n_holdout': len(holdout_datasets),
+                'n_train': df['dataset_name'].nunique() if 'dataset_name' in df.columns else 0,
+            }
+            with open(os.path.join(output_dir, 'holdout_datasets.json'), 'w') as f:
+                json.dump(holdout_meta, f, indent=2)
+            print(f"  Hold-out list saved: {output_dir}/holdout_datasets.json ({len(holdout_datasets)} datasets)")
         print(f"\n>> Per-task training complete. Manifest: {output_dir}/hp_manifest.json")
         return
 
@@ -1843,7 +1902,7 @@ def train_hp_meta_model(hp_db_path: str, output_dir: str = './hp_meta_model',
         print("\n  WARNING: No dataset_ids -- skipping ranker.")
 
     # --- Archetypes ---
-    archetype_data = compute_archetypes(df, n_clusters=n_clusters)
+    archetype_data = compute_archetypes(df, n_clusters=n_clusters, cluster_method=cluster_method)
 
     # --- Save everything ---
     print(f"\n{'='*70}")
@@ -1890,6 +1949,18 @@ def train_hp_meta_model(hp_db_path: str, output_dir: str = './hp_meta_model',
     metadata['n_archetypes'] = len(archetype_data['archetypes']) if archetype_data else 0
     with open(os.path.join(output_dir, 'hp_metadata.json'), 'w') as f:
         json.dump(metadata, f, indent=2, default=str)
+
+    if holdout_datasets:
+        holdout_meta = {
+            'holdout_ratio': holdout_ratio,
+            'seed': holdout_seed,
+            'holdout_datasets': sorted(holdout_datasets),
+            'n_holdout': len(holdout_datasets),
+            'n_train': df['dataset_name'].nunique() if 'dataset_name' in df.columns else 0,
+        }
+        with open(os.path.join(output_dir, 'holdout_datasets.json'), 'w') as f:
+            json.dump(holdout_meta, f, indent=2)
+        print(f"  +-- holdout_datasets.json  ({len(holdout_datasets)} datasets for evaluation)")
 
     # --- Summary ---
     print(f"\n  Saved to {output_dir}/")
@@ -1944,7 +2015,15 @@ if __name__ == "__main__":
                         help='Top-K configs per dataset for predictor training')
     parser.add_argument('--per-task-type', action='store_true',
                         help='Train one model per task_type (if column present)')
+    parser.add_argument('--holdout-ratio', type=float, default=0.0,
+                        help='Fraction of datasets to hold out for evaluation (e.g. 0.2 for fair eval). 0=no hold-out')
+    parser.add_argument('--holdout-seed', type=int, default=42,
+                        help='Random seed for hold-out split')
+    parser.add_argument('--cluster-method', choices=['kmeans', 'spectral'], default='kmeans',
+                        help='Archetype clustering: kmeans or spectral (e.g. spectral with n_clusters=2 from 2_compare)')
     args = parser.parse_args()
 
     train_hp_meta_model(args.hp_db, args.output_dir, top_k=args.top_k,
-                        n_clusters=args.n_clusters, per_task_type=args.per_task_type)
+                        n_clusters=args.n_clusters, per_task_type=args.per_task_type,
+                        holdout_ratio=args.holdout_ratio, holdout_seed=args.holdout_seed,
+                        cluster_method=args.cluster_method)
