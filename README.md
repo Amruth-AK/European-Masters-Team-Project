@@ -2,13 +2,13 @@
 
 ## Overview
 
-This project automates two of the most critical decisions in machine learning — **feature engineering** and **hyperparameter tuning** — using meta-learning: training models on the results of thousands of experiments so they can predict what will work on new datasets.
+Training models on the results of thousands of experiments so they can predict what will work on new datasets.
 
 ---
 
 ## Data Collectors
 
-The Data Collectors (`DataCollector_3.py`, `HPCollector.py`, `PipelineDataCollector.py`) are offline scripts that run large-scale experiments across hundreds of public datasets. They systematically try different feature transforms, hyperparameter configurations, and full pipelines, measure whether each one improves model performance, and log all results to a database. This database becomes the training data for the meta-models.
+The Data Collectors (`DataCollector_3.py`, `HPCollector.py`, `PipelineDataCollector.py`) are scripts that run large-scale experiments across hundreds of public datasets. They systematically try different feature transforms, hyperparameter configurations, and full pipelines, measure whether each one improves model performance, and log all results to a database. This database becomes the training data for the meta-models.
 
 ---
 
