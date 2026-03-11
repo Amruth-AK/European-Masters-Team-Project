@@ -20,7 +20,7 @@ Follow these simple steps to get the app running on your local machine.
 
 First, open your terminal or command prompt and download the project files:
 ```bash
-git clone [https://github.com/Amruth-AK/European-Masters-Team-Project.git](https://github.com/Amruth-AK/European-Masters-Team-Project.git)
+git clone https://github.com/Amruth-AK/European-Masters-Team-Project.git
 cd European-Masters-Team-Project
 ```
 
