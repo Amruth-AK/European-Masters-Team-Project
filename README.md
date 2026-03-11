@@ -21,3 +21,31 @@ First, open your terminal or command prompt and download the project files:
 ```bash
 git clone [https://github.com/Amruth-AK/European-Masters-Team-Project.git](https://github.com/Amruth-AK/European-Masters-Team-Project.git)
 cd European-Masters-Team-Project
+```
+2. Build the Docker Image
+Next, build the Docker container. This step reads the Dockerfile and environment.yml to automatically install Python, Miniconda, and all the required machine learning packages.
+
+Run this command (don't forget the period at the end!):
+```bash
+docker build -t emtp-app .
+```
+⏳ Note: Because this project installs heavy data science libraries like AutoGluon and CatBoost, the initial build process will take a few minutes. Let it run until it finishes completely.
+
+3. Run the Container
+Once the build is finished, spin up the app and connect it to your computer's local port:
+
+```bash
+docker run -p 8501:8501 emtp-app
+```
+4. View the App
+Open your favorite web browser and navigate to:
+```
+👉 http://localhost:8501
+```
+You should now see the EMTP Streamlit app up and running!
+
+To stop the server at any time, simply go back to your terminal and press Ctrl + C.
+
+
+---
+
