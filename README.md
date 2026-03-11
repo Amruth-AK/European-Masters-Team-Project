@@ -49,7 +49,7 @@ docker run -p 8501:8501 emtp-app
 
 Open your web browser and navigate to:
 ```
-👉 http://localhost:8501
+http://localhost:8501
 ```
 Guided Decision-Making in Machine Learning App is running!
 
