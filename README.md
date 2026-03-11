@@ -1,6 +1,6 @@
 # Guided Decision-Making in Machine Learning App
 
-Welcome to the EMTP project! This application is an interactive web dashboard built with **Streamlit** and powered by advanced machine learning libraries including **AutoGluon**, **XGBoost**, **LightGBM**, and **CatBoost**.
+This application is an interactive web dashboard built with **Streamlit** and powered by advanced machine learning libraries including **AutoGluon**, **XGBoost**, **LightGBM**, and **CatBoost**.
 
 To ensure a completely seamless installation experience—without the headache of managing local Python environments or complex package dependencies—this project is fully containerized using **Docker** and **Conda**. 
 
