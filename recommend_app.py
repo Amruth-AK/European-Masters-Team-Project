@@ -1741,7 +1741,7 @@ def generate_suggestions(X, y, meta_models, baseline_score, baseline_std,
         })
     # ─────────────────────────────────────────────────────────────────────────
 
-    # ── Inject imbalance suggestion when class ratio is high ──────────────────
+    # ── Inject imbalance suggestion (always shown) ─────────────────────────────
     y_counts_adv       = pd.Series(y_numeric).value_counts()
     imbalance_ratio_adv = float(y_counts_adv.max() / max(y_counts_adv.min(), 1))
     dominant_frac_adv   = float(y_counts_adv.max() / max(len(y_numeric), 1))
@@ -1757,28 +1757,34 @@ def generate_suggestions(X, y, meta_models, baseline_score, baseline_std,
             )
             _adv_strategy   = 'none' if _severe else 'multiclass_moderate'
             _adv_auto_check = not _severe   # uncheck for severe multiclass
-        method_hint = {'binary': 'is_unbalance=True',
-                       'multiclass_moderate': 'class_weight=balanced',
-                       'none': 'no reweighting (severe imbalance)'}[_adv_strategy]
-        suggestions.append({
-            'type':                'imbalance',
-            'column':              '(model parameter)',
-            'column_b':            None,
-            'method':              'class_weight_balance',
-            'predicted_delta':     1.0,           # always shown at top of group
-            'predicted_delta_raw': 0.0,
-            'description':         (
-                f"Class reweighting — ratio {imbalance_ratio_adv:.1f}:1 "
-                f"(dominant class {dominant_frac_adv:.0%}) — {method_hint}"
-            ),
-            'pinned':              True,
-            # Extra metadata used by the imbalance card UI and training step
-            'imbalance_ratio':     imbalance_ratio_adv,
-            'dominant_frac':       dominant_frac_adv,
-            'n_classes_imb':       int(y_counts_adv.shape[0]),
-            'imbalance_strategy':  _adv_strategy,
-            'auto_checked':        _adv_auto_check,
-        })
+    else:
+        # Low imbalance — still show the option but flag it as unlikely to help
+        _adv_strategy   = 'low'
+        _adv_auto_check = False
+    method_hint = {'binary': 'is_unbalance=True',
+                   'multiclass_moderate': 'class_weight=balanced',
+                   'none': 'no reweighting (severe imbalance)',
+                   'low': 'is_unbalance=True' if is_binary_adv else 'class_weight=balanced',
+                   }[_adv_strategy]
+    suggestions.append({
+        'type':                'imbalance',
+        'column':              '(model parameter)',
+        'column_b':            None,
+        'method':              'class_weight_balance',
+        'predicted_delta':     1.0,           # always shown at top of group
+        'predicted_delta_raw': 0.0,
+        'description':         (
+            f"Class reweighting — ratio {imbalance_ratio_adv:.1f}:1 "
+            f"(dominant class {dominant_frac_adv:.0%}) — {method_hint}"
+        ),
+        'pinned':              True,
+        # Extra metadata used by the imbalance card UI and training step
+        'imbalance_ratio':     imbalance_ratio_adv,
+        'dominant_frac':       dominant_frac_adv,
+        'n_classes_imb':       int(y_counts_adv.shape[0]),
+        'imbalance_strategy':  _adv_strategy,
+        'auto_checked':        _adv_auto_check,
+    })
     # ─────────────────────────────────────────────────────────────────────────
 
     # -------------------------------------------------------------------------
@@ -2109,6 +2115,7 @@ def train_lgbm_model(X_train, y_train, X_val, y_val, n_classes,
     imbalance_strategy:
         'binary'               → is_unbalance=True  (safe for binary at any ratio)
         'multiclass_moderate'  → class_weight='balanced'  (moderate multiclass only)
+        'low'                  → same as binary/multiclass_moderate but for low imbalance
         'none'                 → no reweighting (baseline, or severe multiclass)
     base_params: override the default BASE_PARAMS (e.g. for small-dataset HP tuning)
     """
@@ -2116,9 +2123,9 @@ def train_lgbm_model(X_train, y_train, X_val, y_val, n_classes,
 
     params = (base_params or BASE_PARAMS).copy()
     if apply_imbalance:
-        if imbalance_strategy == 'binary':
+        if imbalance_strategy in ('binary', 'low') and n_classes == 2:
             params['is_unbalance'] = True
-        elif imbalance_strategy == 'multiclass_moderate':
+        elif imbalance_strategy in ('multiclass_moderate', 'low'):
             params['class_weight'] = 'balanced'
         # 'none' → severe multiclass or baseline: no reweighting added
 
@@ -3277,8 +3284,15 @@ def main():
             # ─────────────────────────────────────────────────────────────────
 
             # ── Initialise checkbox states on new analysis ────────────────────
+            # The signature captures the *analysis identity* (dataset + target +
+            # the system-generated suggestions).  Custom steps added by the user
+            # must NOT change it — otherwise every custom addition would reset
+            # all user (de)selections.
+            _n_system_suggestions = sum(
+                1 for s in suggestions if not s.get('custom')
+            )
             _sig = (
-                f"{len(suggestions)}"
+                f"{_n_system_suggestions}"
                 f"__{suggestions[0]['method'] if suggestions else ''}"
                 f"__{st.session_state.X_train.shape if st.session_state.X_train is not None else ''}"
                 f"__{st.session_state.target_col or ''}"
@@ -3592,7 +3606,8 @@ def main():
                 st.warning("Optuna is not installed. Run `pip install optuna` to enable.")
             else:
                 st.caption(
-                    "Runs a Bayesian (TPE) search and finds the best parameter combination. "
+                    "Runs a Bayesian (TPE) search on your **selected transforms** "
+                    "(and class reweighting if enabled). "
                     "Hit **Apply** afterwards to load the result into the editor above."
                 )
 
@@ -3626,11 +3641,75 @@ def main():
                     _y_opt = st.session_state.get('y_train')
                     if _X_opt is None or _y_opt is None:
                         st.warning("Upload a training CSV first.")
+                    elif st.session_state.selected_indices is None or st.session_state.suggestions is None:
+                        st.warning("Run **② Analyze Dataset** first so transforms are available.")
                     else:
                         _n_trials_run = int(st.session_state["_optuna_n_trials_val"])
-                        _opt_prog  = st.progress(0.0, text="Starting Optuna search…")
+                        _opt_prog  = st.progress(0.0, text="Preparing transformed data for Optuna…")
                         _opt_log   = st.empty()
                         _trial_log = []
+
+                        # ── Resolve selected FE suggestions & imbalance ──────
+                        _opt_selected = [st.session_state.suggestions[i]
+                                         for i in st.session_state.selected_indices]
+                        _opt_fe_suggestions = [s for s in _opt_selected
+                                               if s.get('type') != 'imbalance']
+
+                        # Resolve imbalance settings (mirrors training logic)
+                        _opt_imb_suggestion = next(
+                            (s for s in st.session_state.suggestions
+                             if s.get('type') == 'imbalance'), None,
+                        )
+                        _opt_imb_idx = (
+                            st.session_state.suggestions.index(_opt_imb_suggestion)
+                            if _opt_imb_suggestion else None
+                        )
+                        _opt_user_wants_imb = (
+                            st.session_state.get(
+                                f"_ck_persist_{_opt_imb_idx}",
+                                _opt_imb_suggestion.get('auto_checked', False))
+                            if _opt_imb_suggestion else False
+                        )
+                        _opt_imb_strategy = (
+                            _opt_imb_suggestion.get('imbalance_strategy', 'none')
+                            if _opt_imb_suggestion else 'none'
+                        )
+                        _opt_apply_imbalance = (
+                            _opt_user_wants_imb and _opt_imb_strategy != 'none'
+                        )
+
+                        # ── Pre-compute transformed data once (fixed split) ──
+                        _yo = ensure_numeric_target(_y_opt.copy())
+                        _strat = _yo if _yo.value_counts().min() >= 2 else None
+                        _Xtr_o, _Xvl_o, _ytr_o, _yvl_o = train_test_split(
+                            _X_opt.copy(), _yo, test_size=0.2,
+                            random_state=42, stratify=_strat,
+                        )
+
+                        if _opt_fe_suggestions:
+                            _Xtr_t, _opt_fitted = fit_and_apply_suggestions(
+                                _Xtr_o, _ytr_o, _opt_fe_suggestions)
+                            _Xvl_t = apply_fitted_to_test(_Xvl_o, _opt_fitted)
+                        else:
+                            _Xtr_t, _Xvl_t = _Xtr_o, _Xvl_o
+
+                        _Xtr_enc, _Xvl_enc, _ = prepare_data_for_model(
+                            _Xtr_t, _Xvl_t)
+                        _opt_n_classes = int(_yo.nunique())
+
+                        _opt_status_parts = []
+                        if _opt_fe_suggestions:
+                            _opt_status_parts.append(
+                                f"{len(_opt_fe_suggestions)} transform(s)")
+                        if _opt_apply_imbalance:
+                            _opt_status_parts.append(
+                                f"imbalance={_opt_imb_strategy}")
+                        _opt_status = (
+                            " + ".join(_opt_status_parts) if _opt_status_parts
+                            else "raw features"
+                        )
+                        _opt_prog.progress(
+                            0.0, text=f"Running Optuna on {_opt_status}…")
 
                         def _optuna_objective(trial):
                             _p = {
@@ -3645,19 +3724,18 @@ def main():
                                 'reg_lambda':        trial.suggest_float('reg_lambda', 0.0, 5.0),
                                 'random_state': 42, 'verbosity': -1, 'n_jobs': -1,
                             }
+                            # Apply imbalance handling if user enabled it
+                            if _opt_apply_imbalance:
+                                if _opt_imb_strategy in ('binary', 'low') and _opt_n_classes == 2:
+                                    _p['is_unbalance'] = True
+                                elif _opt_imb_strategy in ('multiclass_moderate', 'low'):
+                                    _p['class_weight'] = 'balanced'
                             try:
-                                _yo = ensure_numeric_target(_y_opt.copy())
-                                _strat = _yo if _yo.value_counts().min() >= 2 else None
-                                _Xtr_o, _Xvl_o, _ytr_o, _yvl_o = train_test_split(
-                                    _X_opt.copy(), _yo, test_size=0.2,
-                                    random_state=42, stratify=_strat,
-                                )
-                                _Xtr_enc, _Xvl_enc, _ = prepare_data_for_model(_Xtr_o, _Xvl_o)
                                 _m = lgb.LGBMClassifier(**_p)
                                 _m.fit(_Xtr_enc, _ytr_o,
                                        eval_set=[(_Xvl_enc, _yvl_o)],
                                        callbacks=[lgb.early_stopping(20, verbose=False)])
-                                if int(_yo.nunique()) == 2:
+                                if _opt_n_classes == 2:
                                     return roc_auc_score(_yvl_o, _m.predict_proba(_Xvl_enc)[:, 1])
                                 return roc_auc_score(_yvl_o, _m.predict_proba(_Xvl_enc),
                                                      multi_class='ovr', average='weighted')
@@ -3669,7 +3747,8 @@ def main():
                             _opt_prog.progress(
                                 min(_frac, 1.0),
                                 text=f"Trial {trial.number + 1}/{_n_trials_run} "
-                                     f"— best so far: {study.best_value:.4f}",
+                                     f"— best so far: {study.best_value:.4f} "
+                                     f"({_opt_status})",
                             )
                             _trial_log.append(
                                 f"Trial {trial.number + 1:03d}: {trial.value:.4f}"
@@ -3845,7 +3924,7 @@ def main():
                     enh_label_parts.append("+ custom HP")
                 st.subheader(f"Enhanced Model ({', '.join(enh_label_parts)})")
                 if apply_imbalance:
-                    _strat_label = '`is_unbalance=True`' if _imbalance_strategy == 'binary' else '`class_weight=balanced`'
+                    _strat_label = '`is_unbalance=True`' if _imbalance_strategy in ('binary',) or (_imbalance_strategy == 'low' and n_classes == 2) else '`class_weight=balanced`'
                     st.caption(
                         f"Class imbalance **auto-detected** ({_imbalance_ratio_enh:.1f}:1, "
                         f"dominant class {_dominant_class_frac:.0%}) — "
@@ -3937,9 +4016,9 @@ def main():
                 # effect of every suggestion — transforms + hyperparameter tuning.
                 enh_params = _effective_params.copy()
                 if apply_imbalance:
-                    if _imbalance_strategy == 'binary':
+                    if _imbalance_strategy in ('binary',) or (_imbalance_strategy == 'low' and n_classes == 2):
                         enh_params['is_unbalance'] = True
-                    elif _imbalance_strategy == 'multiclass_moderate':
+                    elif _imbalance_strategy in ('multiclass_moderate', 'low'):
                         enh_params['class_weight'] = 'balanced'
                     # 'none' → severe multiclass: no reweighting
                 X_enh_enc, _, enhanced_full_enc = prepare_data_for_model(X_full_enh, X_full_enh.iloc[:1])
@@ -4493,6 +4572,194 @@ def main():
                     "because the test set does not contain the target column. Upload a test set "
                     "with the target column to compare baseline vs. enhanced models."
                 )
+
+                # ── Threshold Tuning for Predict-Only Mode (binary) ──────
+                _po_n_classes  = st.session_state.get('n_classes', 0)
+                _po_y_proba    = enhanced_test.get('_y_pred_proba')
+                _po_le         = st.session_state.get('label_encoder')
+                if (_po_n_classes == 2
+                        and _po_y_proba is not None
+                        and hasattr(_po_y_proba, 'ndim')
+                        and _po_y_proba.ndim == 2
+                        and _po_y_proba.shape[1] >= 2
+                        and _po_le is not None):
+                    st.divider()
+                    with st.expander(
+                        "🎚️ Decision Threshold Tuning",
+                        expanded=True,
+                    ):
+                        st.info(
+                            "**Adjust the decision threshold to control predictions**  \n\n"
+                            "By default, the model predicts class 1 when probability ≥ 0.5. "
+                            "You can change this cutoff:  \n\n"
+                            "• **Raise** the threshold → fewer positives, higher confidence "
+                            "(more conservative / higher precision).  \n"
+                            "• **Lower** the threshold → more positives, catches more cases "
+                            "(more inclusive / higher recall).  \n\n"
+                            "💡 *Since there are no ground-truth labels, actual precision/recall "
+                            "cannot be computed — but you can see how the class distribution "
+                            "shifts. The chosen threshold will be applied to the downloaded "
+                            "predictions below.*",
+                            icon="ℹ️",
+                        )
+
+                        _po_proba_pos = _po_y_proba[:, 1]
+
+                        # ── Probability distribution histogram ────────────
+                        try:
+                            import plotly.graph_objects as go
+
+                            _po_class_names = list(_po_le.classes_) if _po_le is not None else ['0', '1']
+                            _po_fig = go.Figure()
+                            _po_fig.add_trace(go.Histogram(
+                                x=_po_proba_pos,
+                                nbinsx=50,
+                                marker_color='#58a6ff',
+                                opacity=0.75,
+                                name=f'P({_po_class_names[1] if len(_po_class_names) > 1 else "1"})',
+                            ))
+
+                            # Get current threshold for the vertical line
+                            _po_current_t = st.session_state.get('_pr_threshold_slider', 0.5)
+
+                            _po_fig.add_vline(
+                                x=_po_current_t,
+                                line_dash='dash',
+                                line_color='#f0883e',
+                                line_width=2,
+                                annotation_text=f't={_po_current_t:.2f}',
+                                annotation_position='top',
+                                annotation_font_color='#f0883e',
+                            )
+
+                            _po_fig.update_layout(
+                                xaxis_title=f'Probability of class "{_po_class_names[1] if len(_po_class_names) > 1 else "1"}"',
+                                yaxis_title='Count',
+                                xaxis=dict(range=[0, 1.02], showgrid=True, gridcolor='#30363d'),
+                                yaxis=dict(showgrid=True, gridcolor='#30363d'),
+                                margin=dict(t=30, b=40, l=50, r=20),
+                                height=280,
+                                paper_bgcolor='rgba(0,0,0,0)',
+                                plot_bgcolor='rgba(0,0,0,0)',
+                                font=dict(color='#8b949e', size=11),
+                                showlegend=False,
+                                bargap=0.05,
+                            )
+                            st.plotly_chart(_po_fig, use_container_width=True)
+                        except Exception as _po_hist_err:
+                            st.warning(f"Could not render probability histogram: {_po_hist_err}")
+
+                        # ── Threshold slider ──────────────────────────────
+                        if '_pr_threshold_slider' not in st.session_state:
+                            st.session_state['_pr_threshold_slider'] = 0.5
+
+                        def _po_set_threshold(val):
+                            st.session_state['_pr_threshold_slider'] = val
+
+                        _po_sl_col1, _po_sl_col2 = st.columns([0.6, 0.4])
+                        with _po_sl_col1:
+                            _po_custom_t = st.slider(
+                                "Decision threshold",
+                                min_value=0.01, max_value=0.99,
+                                step=0.01,
+                                key="_pr_threshold_slider",
+                                help="Drag to change the classification cutoff. "
+                                     "Predictions in the download section will update automatically.",
+                            )
+                        with _po_sl_col2:
+                            _po_quick = st.columns(3)
+                            with _po_quick[0]:
+                                st.button(
+                                    "0.3", key="_po_btn_03",
+                                    use_container_width=True,
+                                    on_click=_po_set_threshold, args=(0.3,),
+                                    help="High recall (catch more positives)",
+                                )
+                            with _po_quick[1]:
+                                st.button(
+                                    "0.5", key="_po_btn_05",
+                                    use_container_width=True,
+                                    on_click=_po_set_threshold, args=(0.5,),
+                                    help="Default balanced threshold",
+                                )
+                            with _po_quick[2]:
+                                st.button(
+                                    "0.7", key="_po_btn_07",
+                                    use_container_width=True,
+                                    on_click=_po_set_threshold, args=(0.7,),
+                                    help="High precision (fewer false positives)",
+                                )
+
+                        # ── Class distribution at the chosen threshold ────
+                        _po_pred_at_t = (_po_proba_pos >= _po_custom_t).astype(int)
+                        _po_n_total   = len(_po_pred_at_t)
+                        _po_n_pos     = int(_po_pred_at_t.sum())
+                        _po_n_neg     = _po_n_total - _po_n_pos
+                        _po_pct_pos   = _po_n_pos / max(_po_n_total, 1) * 100
+
+                        _po_class_names = list(_po_le.classes_) if _po_le is not None else ['0', '1']
+                        _po_neg_label = str(_po_class_names[0]) if len(_po_class_names) > 0 else '0'
+                        _po_pos_label = str(_po_class_names[1]) if len(_po_class_names) > 1 else '1'
+
+                        _po_mc1, _po_mc2, _po_mc3 = st.columns(3)
+                        _po_mc1.metric(
+                            f'Predicted "{_po_pos_label}"',
+                            f"{_po_n_pos:,}",
+                            delta=f"{_po_pct_pos:.1f}% of rows",
+                            delta_color="off",
+                        )
+                        _po_mc2.metric(
+                            f'Predicted "{_po_neg_label}"',
+                            f"{_po_n_neg:,}",
+                            delta=f"{100 - _po_pct_pos:.1f}% of rows",
+                            delta_color="off",
+                        )
+                        _po_mc3.metric(
+                            "Threshold",
+                            f"{_po_custom_t:.2f}",
+                            delta=f"{_po_custom_t - 0.5:+.2f} vs default" if abs(_po_custom_t - 0.5) > 1e-4 else "default",
+                            delta_color="off",
+                        )
+
+                        # ── Confidence breakdown ──────────────────────────
+                        _po_high_conf = float(np.mean(
+                            ((_po_proba_pos >= 0.8) | (_po_proba_pos <= 0.2))
+                        ) * 100)
+                        _po_low_conf = float(np.mean(
+                            ((_po_proba_pos > 0.4) & (_po_proba_pos < 0.6))
+                        ) * 100)
+                        st.caption(
+                            f"**Confidence summary**: "
+                            f"{_po_high_conf:.1f}% of predictions are high-confidence "
+                            f"(prob > 0.8 or < 0.2)  ·  "
+                            f"{_po_low_conf:.1f}% are uncertain "
+                            f"(prob between 0.4–0.6)"
+                        )
+
+                        # ── Comparison with baseline model at same threshold ─
+                        _po_base_metrics = st.session_state.get('_test_baseline_metrics') or {}
+                        _po_base_proba   = _po_base_metrics.get('_y_pred_proba')
+                        if (_po_base_proba is not None
+                                and hasattr(_po_base_proba, 'ndim')
+                                and _po_base_proba.ndim == 2
+                                and _po_base_proba.shape[1] >= 2):
+                            _po_base_pred_at_t = (_po_base_proba[:, 1] >= _po_custom_t).astype(int)
+                            _po_base_n_pos     = int(_po_base_pred_at_t.sum())
+                            _po_agree          = int((_po_pred_at_t == _po_base_pred_at_t).sum())
+                            _po_disagree       = _po_n_total - _po_agree
+                            st.caption(
+                                f"**Baseline comparison** at threshold {_po_custom_t:.2f}: "
+                                f"Baseline predicts {_po_base_n_pos:,} positives "
+                                f"vs Enhanced {_po_n_pos:,}  ·  "
+                                f"Models agree on {_po_agree:,}/{_po_n_total:,} rows "
+                                f"({_po_disagree:,} disagreements, "
+                                f"{_po_disagree / max(_po_n_total, 1) * 100:.1f}%)"
+                            )
+
+                        st.caption(
+                            "💡 *The threshold you set here is automatically applied to the "
+                            "**Download Predictions** section below.*"
+                        )
 
             if not _is_predict_only:
                 # --- Full evaluation results comparison ---
@@ -5125,10 +5392,24 @@ def main():
             _test_orig   = st.session_state.get('_test_df_original')  # before column drops
 
             if _y_pred is not None and _le is not None and _test_orig is not None:
+                # ── Apply custom threshold when set ──────────────────────
+                # The PR-curve threshold slider lets users pick a cutoff
+                # different from 0.5.  Re-derive hard predictions here so
+                # the download reflects the chosen threshold.
+                _n_classes   = st.session_state.get('n_classes', 2)
+                _custom_threshold = st.session_state.get('_pr_threshold_slider')
+                if (_custom_threshold is not None
+                        and _n_classes == 2
+                        and _y_proba is not None
+                        and _y_proba.ndim == 2
+                        and _y_proba.shape[1] >= 2):
+                    _y_pred = (
+                        _y_proba[:, 1] >= _custom_threshold
+                    ).astype(int)
+
                 # ── Build available columns ──────────────────────────────
                 # Decode predictions back to original class labels
                 _pred_labels = _le.inverse_transform(_y_pred)
-                _n_classes   = st.session_state.get('n_classes', 2)
                 _class_names = list(_le.classes_)
 
                 # Prediction columns that will be appended
@@ -5201,6 +5482,15 @@ def main():
                     "🎯 = model prediction.  \n"
                     "By default only ID and prediction columns are selected."
                 )
+
+                # Show which threshold is active for the predictions
+                if (_custom_threshold is not None
+                        and _n_classes == 2
+                        and abs(_custom_threshold - 0.5) > 1e-4):
+                    st.info(
+                        f"🎚️ Using custom decision threshold **{_custom_threshold:.2f}** "
+                        f"(from PR-curve tuning). Predicted classes reflect this cutoff."
+                    )
 
                 _selected = st.multiselect(
                     "Columns to include",

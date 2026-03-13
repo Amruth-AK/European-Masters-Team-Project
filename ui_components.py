@@ -126,11 +126,17 @@ def _render_group_card(group_id, group_suggs, all_suggestions):
             is_binary = (n_cls == 2)
 
             # ── What was detected ─────────────────────────────────────────────
-            det_color = '#f0883e' if ratio >= _IMBALANCE_SEVERE else '#d29922'
+            if strategy == 'low':
+                det_color = '#3fb950'   # green — low imbalance
+            elif ratio >= _IMBALANCE_SEVERE:
+                det_color = '#f0883e'
+            else:
+                det_color = '#d29922'
+            _imb_label = f"Low {'binary' if is_binary else f'{n_cls}-class'}" if strategy == 'low' else ('Binary' if is_binary else f'{n_cls}-class')
             st.markdown(
                 f"<div style='padding:10px 14px;border-left:3px solid {det_color};"
                 f"background:#1a1009;border-radius:4px;margin-bottom:10px'>"
-                f"<b>Detected:</b> {'Binary' if is_binary else f'{n_cls}-class'} imbalance — "
+                f"<b>Detected:</b> {_imb_label} imbalance — "
                 f"<b>{ratio:.1f}:1</b> max/min ratio &nbsp;·&nbsp; "
                 f"dominant class makes up <b>{dom_frac:.0%}</b> of training data"
                 f"</div>",
@@ -138,7 +144,17 @@ def _render_group_card(group_id, group_suggs, all_suggestions):
             )
 
             # ── What the enhanced model will do ──────────────────────────────
-            if strategy == 'binary':
+            if strategy == 'low':
+                _low_param = '`is_unbalance=True`' if is_binary else '`class_weight=balanced`'
+                st.markdown(
+                    f"ℹ️ **Low class imbalance — unlikely to have a strong effect**\n\n"
+                    f"Your class distribution is relatively balanced ({ratio:.1f}:1). "
+                    f"Class reweighting ({_low_param}) is available but **not pre-enabled** "
+                    f"because the model will likely handle this distribution well on its own.\n\n"
+                    f"You can still enable it below if you notice that minority-class "
+                    f"recall or F1 is lower than expected after training."
+                )
+            elif strategy == 'binary':
                 st.markdown(
                     "⚠️ **Auto-decision: unchecked by default — train without it first**\n\n"
                     "Class reweighting (`is_unbalance=True`) is available but **not pre-enabled**. "
