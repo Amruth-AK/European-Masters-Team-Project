@@ -18,22 +18,7 @@ An optional AI chat assistant (powered by Google Gemini) is available in the sid
 
 👉 **[Launch the app on Streamlit Cloud](https://mlcompass.streamlit.app)**
 
-## Run Locally
 
-```bash
-# 1. Clone the repo
-git clone https://github.com/your-username/your-repo.git
-cd your-repo
-
-# 2. Install dependencies
-pip install -e ".[reports]"
-pip install streamlit optuna google-generativeai
-
-# 3. Launch the app
-streamlit run app/recommend_app.py
-```
-
-Requires Python 3.9+.
 
 ## Gemini Chat Assistant
 
