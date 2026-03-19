@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mlcompass"
+version = "0.1.0"
+description = "ML feature engineering recommendation library — meta-model driven transform suggestions for classification datasets."
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "scikit-learn>=1.2",
+    "scipy>=1.9",
+    "lightgbm>=3.3",
+]
+
+[project.optional-dependencies]
+reports = ["matplotlib>=3.6"]
+all = ["mlcompass[reports]"]
+
+[tool.setuptools.packages.find]
+include = ["mlcompass*"]
+
+[tool.setuptools.package-data]
+"mlcompass.data" = ["meta_models/**/*.txt", "meta_models/**/*.json"]
