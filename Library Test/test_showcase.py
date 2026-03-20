@@ -4,7 +4,7 @@ ML Compass Library — Brief Showcase
 
 A concise end-to-end demonstration of the mlcompass pipeline using the
 Booking Cancellation dataset. Shows how to go from raw CSV to a full
-HTML report in ~60 lines of pipeline code.
+HTML report.
 
 Usage:  python test_showcase.py
 """
