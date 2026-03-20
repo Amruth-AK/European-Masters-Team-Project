@@ -2447,6 +2447,8 @@ def main():
                         icon="ℹ️",
                     )
                     # ── PR Curve plot ─────────────────────────────────────────
+                    _pr_enh_y_true = None
+                    _pr_enh_y_proba = None
                     try:
                         import plotly.graph_objects as go
 
